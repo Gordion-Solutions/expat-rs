@@ -20,13 +20,16 @@ Once an `xmlwf` binary is built (`cargo build --release --bin xmlwf`),
 run the conformance pass:
 
 ```sh
-./runner.sh
+./runner.sh <xmlconf-root>              # XML 1.0 Fifth Edition (default)
+EDITION=4 ./runner.sh <xmlconf-root>    # Fourth Edition name rules
+VERBOSE=1 ./runner.sh <xmlconf-root>    # also list every failing file
 ```
 
-Output: `Passed: NNN`, `Failed: MM`. Each failure is also written to
-`out/<test-id>.diff` for inspection.
+The catalogue (`xmlconf.xml`) tags some tests with the editions they apply
+to. `editions.py` reads those tags and the runner skips tests that don't
+apply to the selected edition — e.g. ~300 IBM tests of the Fourth Edition
+Appendix B name rules are not errors under the Fifth Edition.
 
 ## Current status
 
-Numbers live in `STATUS.md`. Last run: 94% accept on valid input,
-~82% on tests of shipped features (51.2% on the full 1810-test suite).
+Numbers live in `STATUS.md`.
