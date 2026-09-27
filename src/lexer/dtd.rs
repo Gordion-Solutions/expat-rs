@@ -4,10 +4,13 @@
 //! §2.8 and §3.2–§4.7: every markup declaration in the internal subset is
 //! tokenised and checked against its production. Nothing here validates a
 //! document against its DTD (that is a validity concern, not
-//! well-formedness), and entity *values* are still recorded by
-//! `entities::parse_internal_subset`.
+//! well-formedness). The declarations the parser needs (entities,
+//! attribute defaults, parameter-entity references) are recorded in
+//! `Lexer::dtd`, in document order, for the parser to collect with
+//! `take_dtd`.
 
 use super::Lexer;
+use crate::entities::{expand_char_refs, Dtd, DtdDecl, EntityDef};
 use crate::error::{Result, XmlError};
 use crate::token::Token;
 
@@ -22,6 +25,7 @@ impl<'a> Lexer<'a> {
         self.require_whitespace("after '<!DOCTYPE'")?;
         let name = self.scan_name()?;
         let body_start = self.pos.byte_offset;
+        self.dtd = Dtd::default();
 
         let had_space = self.skip_whitespace();
         if self.at_keyword(b"SYSTEM") || self.at_keyword(b"PUBLIC") {
@@ -29,6 +33,7 @@ impl<'a> Lexer<'a> {
                 return Err(self.not_wf("whitespace required before external ID"));
             }
             self.scan_external_id(false)?;
+            self.dtd.external_subset = true;
             self.skip_whitespace();
         }
         if self.current() == Some(b'[') {
@@ -100,7 +105,9 @@ impl<'a> Lexer<'a> {
     fn scan_pe_reference(&mut self) -> Result<()> {
         self.bump(); // %
         self.scan_name()?;
-        self.expect_byte(b';', "expected ';' to close parameter-entity reference")
+        self.expect_byte(b';', "expected ';' to close parameter-entity reference")?;
+        self.dtd.decls.push(DtdDecl::PeRef);
+        Ok(())
     }
 
     /// §3.2 [Production 45]:
@@ -283,7 +290,10 @@ impl<'a> Lexer<'a> {
         if self.try_literal(b"#FIXED") {
             self.require_whitespace("after #FIXED")?;
         }
-        self.scan_attr_value().map(|_| ())
+        let pos = self.pos;
+        let value = self.scan_attr_value()?;
+        self.dtd.decls.push(DtdDecl::AttDefault { value: value.to_string(), pos });
+        Ok(())
     }
 
     /// §4.2 [Productions 70–74, 76]:
@@ -300,12 +310,13 @@ impl<'a> Lexer<'a> {
             self.bump();
             self.require_whitespace("after '%' in parameter-entity declaration")?;
         }
-        self.scan_name()?;
+        let name = self.scan_name()?;
         self.require_whitespace("after entity name")?;
-        if matches!(self.current(), Some(b'"' | b'\'')) {
-            self.scan_entity_value()?;
+        let def = if matches!(self.current(), Some(b'"' | b'\'')) {
+            EntityDef::Internal(expand_char_refs(self.scan_entity_value()?))
         } else {
-            self.scan_external_id(false)?;
+            let (public_id, system_id) = self.scan_external_id(false)?;
+            let mut unparsed = false;
             let had_space = self.skip_whitespace();
             if self.at_keyword(b"NDATA") {
                 if parameter {
@@ -317,10 +328,18 @@ impl<'a> Lexer<'a> {
                 self.advance_ascii(b"NDATA".len());
                 self.require_whitespace("after NDATA")?;
                 self.scan_name()?;
+                unparsed = true;
             }
-        }
+            EntityDef::External {
+                system_id: system_id.unwrap_or_default().to_string(),
+                public_id: public_id.map(str::to_string),
+                unparsed,
+            }
+        };
         self.skip_whitespace();
-        self.expect_byte(b'>', "expected '>' to close entity declaration")
+        self.expect_byte(b'>', "expected '>' to close entity declaration")?;
+        self.dtd.decls.push(DtdDecl::Entity { name: name.to_string(), parameter, def });
+        Ok(())
     }
 
     /// §2.3 [Production 9]:
@@ -330,14 +349,19 @@ impl<'a> Lexer<'a> {
     ///
     /// In the internal subset, §2.8 WFC "PEs in Internal Subset" forbids
     /// parameter-entity references inside markup declarations, so '%' is
-    /// always an error here.
-    fn scan_entity_value(&mut self) -> Result<()> {
+    /// always an error here. Returns the literal value between the quotes.
+    fn scan_entity_value(&mut self) -> Result<&'a str> {
         let quote = self.current().unwrap();
         self.bump();
+        let start = self.pos.byte_offset;
         loop {
             match self.current() {
                 None => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "entity value" }),
-                Some(c) if c == quote => { self.bump(); return Ok(()); }
+                Some(c) if c == quote => {
+                    let value = self.slice(start);
+                    self.bump();
+                    return Ok(value);
+                }
                 Some(b'%') => return Err(self.not_wf(
                     "parameter-entity reference not allowed within a declaration in the internal subset")),
                 Some(b'&') => self.check_reference_syntax()?,
@@ -371,32 +395,32 @@ impl<'a> Lexer<'a> {
     ///   PublicID   ::= 'PUBLIC' S PubidLiteral
     ///
     /// With `public_id_ok` (notation declarations), the system literal after
-    /// a public ID is optional.
-    fn scan_external_id(&mut self, public_id_ok: bool) -> Result<()> {
+    /// a public ID is optional. Returns `(public ID, system ID)`.
+    fn scan_external_id(&mut self, public_id_ok: bool) -> Result<(Option<&'a str>, Option<&'a str>)> {
         if self.try_keyword(b"SYSTEM") {
             self.require_whitespace("after SYSTEM")?;
-            return self.scan_system_literal();
+            return Ok((None, Some(self.scan_system_literal()?)));
         }
         if !self.try_keyword(b"PUBLIC") {
             return Err(self.eof_or_not_wf("declaration", "expected SYSTEM or PUBLIC"));
         }
         self.require_whitespace("after PUBLIC")?;
-        self.scan_pubid_literal()?;
+        let public_id = self.scan_pubid_literal()?;
         let had_space = self.skip_whitespace();
         if matches!(self.current(), Some(b'"' | b'\'')) {
             if !had_space {
                 return Err(self.not_wf("whitespace required between public and system literals"));
             }
-            self.scan_system_literal()
+            Ok((Some(public_id), Some(self.scan_system_literal()?)))
         } else if public_id_ok {
-            Ok(())
+            Ok((Some(public_id), None))
         } else {
             Err(self.eof_or_not_wf("declaration", "expected system literal after public ID"))
         }
     }
 
     /// §2.3 [Production 11]: SystemLiteral ::= ('"' [^"]* '"') | ("'" [^']* "'")
-    fn scan_system_literal(&mut self) -> Result<()> {
+    fn scan_system_literal(&mut self) -> Result<&'a str> {
         self.scan_quoted(|_| true, "system literal")
     }
 
@@ -404,21 +428,28 @@ impl<'a> Lexer<'a> {
     ///
     ///   PubidLiteral ::= '"' PubidChar* '"' | "'" (PubidChar - "'")* "'"
     ///   PubidChar    ::= #x20 | #xD | #xA | [a-zA-Z0-9] | [-'()+,./:=?;!*#@$_%]
-    fn scan_pubid_literal(&mut self) -> Result<()> {
+    fn scan_pubid_literal(&mut self) -> Result<&'a str> {
         self.scan_quoted(|b| b.is_ascii_alphanumeric() || b" \r\n-'()+,./:=?;!*#@$_%".contains(&b),
                          "public ID literal")
     }
 
-    fn scan_quoted(&mut self, allowed: impl Fn(u8) -> bool, context: &'static str) -> Result<()> {
+    /// Scan a quoted literal whose bytes satisfy `allowed`; returns the text
+    /// between the quotes.
+    fn scan_quoted(&mut self, allowed: impl Fn(u8) -> bool, context: &'static str) -> Result<&'a str> {
         let quote = match self.current() {
             Some(q @ (b'"' | b'\'')) => q,
             _ => return Err(self.eof_or_not_wf(context, "expected quoted literal")),
         };
         self.bump();
+        let start = self.pos.byte_offset;
         loop {
             match self.current() {
                 None => return Err(XmlError::UnexpectedEof { pos: self.pos, context }),
-                Some(c) if c == quote => { self.bump(); return Ok(()); }
+                Some(c) if c == quote => {
+                    let value = self.slice(start);
+                    self.bump();
+                    return Ok(value);
+                }
                 Some(c) if !allowed(c) => return Err(self.not_wf(
                     &format!("character {:?} not allowed in {context}", c as char))),
                 Some(_) => self.bump(),
