@@ -15,7 +15,9 @@
 
 use crate::chars::Edition;
 use crate::error::{Position, Result, XmlError};
-use crate::event::Event;
+use std::borrow::Cow;
+
+use crate::event::{normalize_newlines, Attribute, Event};
 use crate::lexer::Lexer;
 use crate::token::Token;
 use crate::entities::{DtdDecl, EntityTable, ExpansionLimits};
@@ -124,7 +126,7 @@ impl<'a> Parser<'a> {
             if self.stack.is_empty() {
                 self.phase = Phase::Epilog;
             }
-            return Ok(Some(Event::EndElement(name)));
+            return Ok(Some(Event::EndElement(Cow::Borrowed(name))));
         }
         loop {
             self.last_pos = self.lexer.position();
@@ -166,6 +168,14 @@ impl<'a> Parser<'a> {
             });
         }
         Ok(())
+    }
+
+    /// Event attributes from a start tag's lexical attributes.
+    fn attributes(&mut self, attrs: Vec<crate::token::Attr<'a>>) -> Result<Vec<Attribute<'a>>> {
+        Ok(attrs
+            .into_iter()
+            .map(|a| Attribute { name: Cow::Borrowed(a.name), value: normalize_newlines(a.value), specified: true })
+            .collect())
     }
 
     /// Check the entity references in each attribute value.
@@ -272,7 +282,7 @@ impl<'a> Parser<'a> {
                 self.check_attr_entities(&attributes)?;
                 self.phase = Phase::Body;
                 self.stack.push(name);
-                Ok(Some(Event::StartElement { name, attributes }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes: self.attributes(attributes)? }))
             }
             Token::EmptyTag { name, attributes } => {
                 if self.phase == Phase::Epilog {
@@ -288,7 +298,7 @@ impl<'a> Parser<'a> {
                 self.stack.push(name);
                 self.pending_end = Some(name);
                 self.phase = Phase::Body;
-                Ok(Some(Event::StartElement { name, attributes }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes: self.attributes(attributes)? }))
             }
             Token::EndTag(name) => {
                 let top = self.stack.pop().ok_or_else(|| XmlError::NotWellFormed {
@@ -304,7 +314,7 @@ impl<'a> Parser<'a> {
                 if self.stack.is_empty() {
                     self.phase = Phase::Epilog;
                 }
-                Ok(Some(Event::EndElement(name)))
+                Ok(Some(Event::EndElement(Cow::Borrowed(name))))
             }
             Token::Text(s) => {
                 // Per §2.1: character data only inside the root element.
@@ -318,7 +328,7 @@ impl<'a> Parser<'a> {
                     // Whitespace in the prolog/epilog is silently absorbed.
                     return Ok(None);
                 }
-                Ok(Some(Event::Text(s)))
+                Ok(Some(Event::Text(normalize_newlines(s))))
             }
             Token::CData(s) => {
                 if self.stack.is_empty() {
@@ -327,11 +337,11 @@ impl<'a> Parser<'a> {
                         reason: "CDATA section outside the root element".into(),
                     });
                 }
-                Ok(Some(Event::CData(s)))
+                Ok(Some(Event::CData(normalize_newlines(s))))
             }
-            Token::Comment(s) => Ok(Some(Event::Comment(s))),
+            Token::Comment(s) => Ok(Some(Event::Comment(normalize_newlines(s)))),
             Token::ProcessingInstruction { target, body } => {
-                Ok(Some(Event::ProcessingInstruction { target, body }))
+                Ok(Some(Event::ProcessingInstruction { target: Cow::Borrowed(target), body: normalize_newlines(body) }))
             }
             // Entity references: built-in (always available) or DTD-declared.
             // Either is validated for well-formedness; expansion size is
@@ -344,15 +354,15 @@ impl<'a> Parser<'a> {
                     });
                 }
                 if let Some(text) = crate::entities::builtin_entity(name) {
-                    return Ok(Some(Event::Text(text)));
+                    return Ok(Some(Event::Text(Cow::Borrowed(text))));
                 }
-                // Replacement text is checked, and budgeted, but not yet
-                // surfaced as events.
+                // Replacement text is checked and budgeted; its events are
+                // not surfaced yet.
                 let mut x = self.expander();
                 x.check_content_entity(name)?;
                 let used = x.expanded;
                 self.charge(used)?;
-                Ok(Some(Event::Text("")))
+                Ok(None)
             }
             Token::CharRef(c) => {
                 if self.stack.is_empty() {
@@ -361,11 +371,7 @@ impl<'a> Parser<'a> {
                         reason: "character reference outside the root element".into(),
                     });
                 }
-                // Surface as Text for now — eventually we'd allocate or borrow.
-                // For week 2 we lose the source slice; that's acceptable for
-                // well-formedness checking.
-                let _ = c;
-                Ok(Some(Event::Text("")))
+                Ok(Some(Event::Text(Cow::Owned(c.to_string()))))
             }
         }
     }
