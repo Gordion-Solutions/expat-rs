@@ -6,6 +6,7 @@
 
 mod chars;
 mod edition4;
+mod expand;
 pub mod error;
 pub mod token;
 pub mod lexer;

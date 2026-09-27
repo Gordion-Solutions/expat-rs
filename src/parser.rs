@@ -18,7 +18,8 @@ use crate::error::{Position, Result, XmlError};
 use crate::event::Event;
 use crate::lexer::Lexer;
 use crate::token::Token;
-use crate::entities::{builtin_entity, parse_internal_subset, EntityTable, ExpansionLimits};
+use crate::entities::{DtdDecl, EntityTable, ExpansionLimits};
+use crate::expand::{Expander, ExternalLoader};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Phase {
@@ -43,6 +44,17 @@ pub struct Parser<'a> {
     last_pos: Position,
     /// Entities declared by `<!ENTITY ...>` in the DOCTYPE internal subset.
     entities: EntityTable,
+    edition: Edition,
+    /// `standalone` from the XML declaration, if given.
+    standalone: Option<bool>,
+    /// Whether §4.1 WFC Entity Declared applies: no DTD, or only an
+    /// internal subset without parameter-entity references, or
+    /// standalone="yes". Otherwise an undeclared entity is a validity
+    /// error, not a well-formedness one.
+    entity_declared_wfc: bool,
+    /// Caller-supplied loader for external parsed entities. `None` (the
+    /// default) never reads anything outside the document.
+    loader: Option<Box<ExternalLoader<'a>>>,
     expansion_limits: ExpansionLimits,
     /// Cumulative bytes of expanded entity content seen so far in this
     /// document. The per-reference budget alone doesn't catch the
@@ -62,6 +74,10 @@ impl<'a> Parser<'a> {
             pending_end: None,
             last_pos: Position::start(),
             entities: EntityTable::new(),
+            edition: Edition::default(),
+            standalone: None,
+            entity_declared_wfc: true,
+            loader: None,
             expansion_limits: ExpansionLimits::default(),
             expanded_bytes_total: 0,
         }
@@ -72,6 +88,22 @@ impl<'a> Parser<'a> {
     /// Appendix B character classes.
     pub fn with_edition(mut self, edition: Edition) -> Self {
         self.lexer = self.lexer.with_edition(edition);
+        self.edition = edition;
+        self
+    }
+
+    /// Read external parsed entities with `load(system_id, public_id)`,
+    /// which returns the entity's text or `None` to leave it unread.
+    ///
+    /// Off by default: without a loader the parser never touches anything
+    /// outside the input, which rules out XXE-style file disclosure. Only
+    /// install a loader for trusted input, and resolve identifiers
+    /// defensively.
+    pub fn with_external_loader(
+        mut self,
+        load: impl FnMut(&str, Option<&str>) -> Option<String> + 'a,
+    ) -> Self {
+        self.loader = Some(Box::new(load));
         self
     }
 
@@ -94,11 +126,11 @@ impl<'a> Parser<'a> {
             return Ok(Some(Event::EndElement(name)));
         }
         loop {
+            self.last_pos = self.lexer.position();
             let tok = match self.lexer.next_token()? {
                 Some(t) => t,
                 None    => return self.handle_eof(),
             };
-            self.last_pos = self.lexer_pos();
 
             match self.handle(tok)? {
                 None    => continue, // event was consumed/folded — keep going
@@ -107,7 +139,72 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn lexer_pos(&self) -> Position { Position::start() }
+    fn expander(&mut self) -> Expander<'_, 'a> {
+        Expander::new(
+            &self.entities,
+            self.expansion_limits,
+            self.edition,
+            self.entity_declared_wfc,
+            self.loader.as_deref_mut(),
+            self.last_pos,
+        )
+    }
+
+    /// Add the bytes one reference expanded to the document-wide total.
+    /// The per-reference budget alone doesn't catch the quadratic-blowup
+    /// pattern (many references to one benign-looking entity); this does.
+    fn charge(&mut self, bytes: usize) -> Result<()> {
+        self.expanded_bytes_total = self.expanded_bytes_total.saturating_add(bytes);
+        if self.expanded_bytes_total > self.expansion_limits.max_expanded_bytes {
+            return Err(XmlError::NotWellFormed {
+                pos: self.last_pos,
+                reason: format!(
+                    "cumulative entity expansion exceeded {} bytes — \
+                     possible quadratic-blowup payload",
+                    self.expansion_limits.max_expanded_bytes),
+            });
+        }
+        Ok(())
+    }
+
+    /// Check the entity references in each attribute value.
+    fn check_attr_entities(&mut self, attributes: &[crate::token::Attr<'_>]) -> Result<()> {
+        for a in attributes {
+            if a.value.contains('&') {
+                let mut x = self.expander();
+                x.check_attr_value(a.value)?;
+                let used = x.expanded;
+                self.charge(used)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Act on the internal subset's declarations in document order (§5.1).
+    fn process_dtd(&mut self) -> Result<()> {
+        let dtd = self.lexer.take_dtd();
+        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef));
+        self.entity_declared_wfc = self.standalone == Some(true)
+            || (!dtd.external_subset && !has_pe_refs);
+        for decl in dtd.decls {
+            match decl {
+                DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
+                DtdDecl::Entity { parameter: true, .. } => {}
+                DtdDecl::AttDefault { value, pos } => {
+                    if value.contains('&') {
+                        let mut x = self.expander();
+                        x.pos = pos;
+                        x.check_attr_value(&value)?;
+                    }
+                }
+                // Parameter entities are not read yet, so per §5.1 the
+                // entity and attribute-list declarations after an
+                // unread one must not be processed.
+                DtdDecl::PeRef => break,
+            }
+        }
+        Ok(())
+    }
 
     fn handle_eof(&mut self) -> Result<Option<Event<'a>>> {
         if !self.stack.is_empty() {
@@ -141,6 +238,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.saw_xmldecl = true;
+                self.standalone = d.standalone;
                 Ok(Some(Event::XmlDecl(d)))
             }
             Token::Doctype { name, body } => {
@@ -157,8 +255,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 self.saw_doctype = true;
-                // Parse <!ENTITY ...> declarations from the internal subset
-                parse_internal_subset(body, &mut self.entities);
+                self.process_dtd()?;
                 Ok(Some(Event::Doctype { name, body }))
             }
             Token::StartTag { name, attributes } => {
@@ -170,7 +267,8 @@ impl<'a> Parser<'a> {
                 }
                 // QName check (Namespaces 1.0 §3) is opt-in via check_qname —
                 // pure XML 1.0 allows multiple colons in Names.
-                Self::check_unique_attrs(&attributes, self.last_pos)?;
+                check_unique_attrs(&attributes, self.last_pos)?;
+                self.check_attr_entities(&attributes)?;
                 self.phase = Phase::Body;
                 self.stack.push(name);
                 Ok(Some(Event::StartElement { name, attributes }))
@@ -182,7 +280,8 @@ impl<'a> Parser<'a> {
                         reason: "second root element not allowed".into(),
                     });
                 }
-                Self::check_unique_attrs(&attributes, self.last_pos)?;
+                check_unique_attrs(&attributes, self.last_pos)?;
+                self.check_attr_entities(&attributes)?;
                 // Push to mirror what a normal start tag does — the matching
                 // pending_end will pop it on the next call.
                 self.stack.push(name);
@@ -243,33 +342,16 @@ impl<'a> Parser<'a> {
                         reason: "entity reference outside the root element".into(),
                     });
                 }
-                if let Some(text) = builtin_entity(name) {
+                if let Some(text) = crate::entities::builtin_entity(name) {
                     return Ok(Some(Event::Text(text)));
                 }
-                if self.entities.is_declared(name) {
-                    // Validate (and budget-check) the expansion against the
-                    // per-reference budget, then add to the document-wide
-                    // running total. Both must be enforced to defeat
-                    // quadratic-blowup payloads (many refs to one entity).
-                    let added = self.entities.validate_expansion(
-                        name, self.expansion_limits, self.last_pos,
-                    )?;
-                    self.expanded_bytes_total = self.expanded_bytes_total.saturating_add(added);
-                    if self.expanded_bytes_total > self.expansion_limits.max_expanded_bytes {
-                        return Err(XmlError::NotWellFormed {
-                            pos: self.last_pos,
-                            reason: format!(
-                                "cumulative entity expansion exceeded {} bytes — \
-                                 possible quadratic-blowup payload",
-                                self.expansion_limits.max_expanded_bytes),
-                        });
-                    }
-                    return Ok(Some(Event::Text("")));
-                }
-                Err(XmlError::NotWellFormed {
-                    pos: self.last_pos,
-                    reason: format!("undeclared entity {name:?}"),
-                })
+                // Replacement text is checked, and budgeted, but not yet
+                // surfaced as events.
+                let mut x = self.expander();
+                x.check_content_entity(name)?;
+                let used = x.expanded;
+                self.charge(used)?;
+                Ok(Some(Event::Text("")))
             }
             Token::CharRef(c) => {
                 if self.stack.is_empty() {
@@ -315,22 +397,22 @@ impl<'a> Parser<'a> {
         }
         Ok(())
     }
+}
 
-    /// Per §3.1 (Unique Att Spec): no element may have two attributes with
-    /// the same name.
-    fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
-        for (i, a) in attrs.iter().enumerate() {
-            for b in &attrs[..i] {
-                if a.name == b.name {
-                    return Err(XmlError::NotWellFormed {
-                        pos,
-                        reason: format!("duplicate attribute {:?}", a.name),
-                    });
-                }
+/// Per §3.1 (Unique Att Spec): no element may have two attributes with the
+/// same name.
+pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
+    for (i, a) in attrs.iter().enumerate() {
+        for b in &attrs[..i] {
+            if a.name == b.name {
+                return Err(XmlError::NotWellFormed {
+                    pos,
+                    reason: format!("duplicate attribute {:?}", a.name),
+                });
             }
         }
-        Ok(())
     }
+    Ok(())
 }
 
 // Built-in entities are defined in `crate::entities::builtin_entity`.

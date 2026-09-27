@@ -9,6 +9,7 @@
 
 mod dtd;
 
+use crate::entities::Dtd;
 use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
@@ -24,6 +25,8 @@ pub struct Lexer<'a> {
     /// Byte offset where the document proper starts: 0, or 3 after a UTF-8
     /// byte order mark. The XML declaration is only recognised here.
     doc_start: usize,
+    /// Declarations recorded while tokenising the DOCTYPE (see `dtd.rs`).
+    dtd: Dtd,
 }
 
 impl<'a> Lexer<'a> {
@@ -37,6 +40,64 @@ impl<'a> Lexer<'a> {
             first_invalid: first_invalid_char(src),
             edition: Edition::default(),
             doc_start,
+            dtd: Dtd::default(),
+        }
+    }
+
+    /// Current position: where the next token starts.
+    pub fn position(&self) -> Position {
+        self.pos
+    }
+
+    /// Take the declarations recorded by the most recent DOCTYPE token.
+    pub(crate) fn take_dtd(&mut self) -> Dtd {
+        std::mem::take(&mut self.dtd)
+    }
+
+    /// Skip a text declaration at the very start of an external parsed
+    /// entity, if there is one. §4.3.1 [Production 77]:
+    ///
+    ///   TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'
+    ///
+    /// Unlike the XML declaration, `version` is optional, `encoding` is
+    /// required and `standalone` is not allowed.
+    pub(crate) fn skip_text_decl(&mut self) -> Result<()> {
+        let rest = &self.src[self.pos.byte_offset..];
+        let is_decl = rest.starts_with(b"<?xml")
+            && matches!(rest.get(5), Some(b' ' | b'\t' | b'\r' | b'\n'));
+        if !is_decl {
+            return Ok(());
+        }
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { pos, reason: reason.into() };
+        self.pos.byte_offset += 5;
+        self.pos.column += 5;
+        self.skip_whitespace();
+        if self.try_keyword(b"version") {
+            self.scan_eq()?;
+            let pos = self.pos;
+            let v = self.scan_attr_value()?;
+            if !self.is_valid_version(v) {
+                return Err(not_wf(pos, &format!("invalid XML version number {v:?}")));
+            }
+            if !self.skip_whitespace() {
+                return Err(not_wf(self.pos, "whitespace required before encoding in text declaration"));
+            }
+        }
+        if !self.try_keyword(b"encoding") {
+            return Err(not_wf(self.pos, "text declaration requires an encoding declaration"));
+        }
+        self.scan_eq()?;
+        let pos = self.pos;
+        let name = self.scan_attr_value()?;
+        if !is_valid_enc_name(name) {
+            return Err(not_wf(pos, &format!("invalid encoding name {name:?}")));
+        }
+        self.skip_whitespace();
+        if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
+            self.bump(); self.bump();
+            Ok(())
+        } else {
+            Err(not_wf(self.pos, "expected '?>' to close text declaration (standalone is not allowed here)"))
         }
     }
 
