@@ -26,8 +26,10 @@ use crate::lexer::Lexer;
 use crate::token::Token;
 
 /// Loads the text of an external parsed entity from its system and public
-/// identifiers. Returning `None` leaves the entity unread.
-pub type ExternalLoader<'l> = dyn FnMut(&str, Option<&str>) -> Option<String> + 'l;
+/// identifiers: `Ok(Some(text))`, `Ok(None)` to leave it unread, or
+/// `Err(reason)` if it should be read but can't be.
+pub type ExternalLoader<'l> =
+    dyn FnMut(&str, Option<&str>) -> std::result::Result<Option<String>, String> + 'l;
 
 pub(crate) struct Expander<'e, 'l> {
     pub table: &'e EntityTable,
@@ -113,7 +115,9 @@ impl<'e, 'l> Expander<'e, 'l> {
             }
             Some(EntityDef::External { system_id, public_id, .. }) => {
                 let loaded = match self.loader.as_mut() {
-                    Some(load) => load(system_id, public_id.as_deref()),
+                    Some(load) => load(system_id, public_id.as_deref()).map_err(|reason| {
+                        XmlError::ExternalEntity { pos: self.pos, reason: format!("{name:?} ({system_id}): {reason}") }
+                    })?,
                     None => None,
                 };
                 match loaded {

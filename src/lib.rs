@@ -13,8 +13,10 @@ pub mod lexer;
 pub mod event;
 pub mod parser;
 pub mod entities;
+pub mod encoding;
 
 pub use chars::Edition;
+pub use encoding::decode;
 pub use error::{Position, XmlError, Result};
 pub use event::Event;
 pub use lexer::Lexer;

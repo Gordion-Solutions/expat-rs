@@ -33,6 +33,10 @@ pub enum XmlError {
     /// Encoding-related error.
     #[error("encoding error at {pos:?}: {reason}")]
     Encoding { pos: Position, reason: String },
+
+    /// An external entity could not be loaded (the caller's loader failed).
+    #[error("cannot load external entity at {pos:?}: {reason}")]
+    ExternalEntity { pos: Position, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, XmlError>;
