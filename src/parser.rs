@@ -13,6 +13,7 @@
 //!   (week 4+ — leases the work to the parser; the lexer surfaces references
 //!   raw)
 
+use crate::chars::Edition;
 use crate::error::{Position, Result, XmlError};
 use crate::event::Event;
 use crate::lexer::Lexer;
@@ -64,6 +65,14 @@ impl<'a> Parser<'a> {
             expansion_limits: ExpansionLimits::default(),
             expanded_bytes_total: 0,
         }
+    }
+
+    /// Select the XML 1.0 edition whose Name rules apply. Default:
+    /// [`Edition::Fifth`]; use [`Edition::Fourth`] for the stricter
+    /// Appendix B character classes.
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.lexer = self.lexer.with_edition(edition);
+        self
     }
 
     /// Configure entity-expansion limits — defaults are conservative and

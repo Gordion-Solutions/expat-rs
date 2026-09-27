@@ -1,6 +1,81 @@
 //! Character-level rules shared by the lexer and the entity layer.
 //!
-//! Per W3C XML 1.0 (Fifth Edition) §2.2 and §4.1.
+//! Per W3C XML 1.0 (Fifth Edition) §2.2, §2.3 and §4.1, plus the
+//! Fourth Edition name rules (Appendix B) behind [`Edition::Fourth`].
+
+use crate::edition4::{BASE_CHAR, COMBINING_CHAR, DIGIT, EXTENDER, IDEOGRAPHIC};
+
+/// Which edition of XML 1.0 decides what characters may appear in names.
+///
+/// The editions differ only in the Name productions. The Fifth Edition
+/// (2008, the current Recommendation) allows broad Unicode ranges. Editions
+/// one to four allow a fixed list of letters, digits, combining characters
+/// and extenders (Appendix B), so some names legal under the Fifth Edition
+/// are not well-formed under the Fourth. Choose `Fourth` to accept and
+/// reject names the way parsers built on the older rules do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Edition {
+    /// XML 1.0 Fourth Edition, Appendix B character classes.
+    Fourth,
+    /// XML 1.0 Fifth Edition, §2.3 [Productions 4, 4a].
+    #[default]
+    Fifth,
+}
+
+/// Name start character under `edition`.
+pub(crate) fn is_name_start_char(c: char, edition: Edition) -> bool {
+    match edition {
+        Edition::Fifth  => is_name_start_char_5e(c),
+        // 4th ed. [5] Name ::= (Letter | '_' | ':') (NameChar)*
+        Edition::Fourth => c == '_' || c == ':' || is_letter_4e(c),
+    }
+}
+
+/// Name character under `edition`.
+pub(crate) fn is_name_char(c: char, edition: Edition) -> bool {
+    match edition {
+        Edition::Fifth => is_name_start_char_5e(c) || matches!(c,
+            '-' | '.' | '0'..='9' | '\u{B7}' |
+            '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}'
+        ),
+        // 4th ed. [4] NameChar ::= Letter | Digit | '.' | '-' | '_' | ':'
+        //                         | CombiningChar | Extender
+        Edition::Fourth => matches!(c, '.' | '-' | '_' | ':')
+            || is_letter_4e(c)
+            || in_table(DIGIT, c)
+            || in_table(COMBINING_CHAR, c)
+            || in_table(EXTENDER, c),
+    }
+}
+
+/// Per 5th ed. §2.3 [Production 4]: NameStartChar.
+fn is_name_start_char_5e(c: char) -> bool {
+    matches!(c,
+        ':' | '_' | 'A'..='Z' | 'a'..='z' |
+        '\u{C0}'..='\u{D6}'    | '\u{D8}'..='\u{F6}'   |
+        '\u{F8}'..='\u{2FF}'   | '\u{370}'..='\u{37D}' |
+        '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' |
+        '\u{2070}'..='\u{218F}'| '\u{2C00}'..='\u{2FEF}' |
+        '\u{3001}'..='\u{D7FF}'| '\u{F900}'..='\u{FDCF}' |
+        '\u{FDF0}'..='\u{FFFD}'| '\u{10000}'..='\u{EFFFF}'
+    )
+}
+
+/// 4th ed. [84] Letter ::= BaseChar | Ideographic
+fn is_letter_4e(c: char) -> bool {
+    in_table(BASE_CHAR, c) || in_table(IDEOGRAPHIC, c)
+}
+
+/// Binary search a sorted, non-overlapping range table.
+fn in_table(table: &[(char, char)], c: char) -> bool {
+    table
+        .binary_search_by(|&(lo, hi)| {
+            if hi < c { std::cmp::Ordering::Less }
+            else if lo > c { std::cmp::Ordering::Greater }
+            else { std::cmp::Ordering::Equal }
+        })
+        .is_ok()
+}
 
 /// Per §2.2 [Production 2]: Char
 /// = #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]

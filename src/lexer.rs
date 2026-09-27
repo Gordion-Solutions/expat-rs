@@ -7,7 +7,7 @@
 //! Implements the lexical rules of W3C XML 1.0 (Fifth Edition) §2 and §3.
 //! Each non-trivial scan function carries a spec citation.
 
-use crate::chars::{decode_char_ref, first_invalid_char};
+use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
@@ -17,6 +17,8 @@ pub struct Lexer<'a> {
     /// First character in the input that is not a §2.2 Char. Found with one
     /// up-front scan; reported as soon as a token reaches past it.
     first_invalid: Option<(usize, char)>,
+    /// Which edition's Name rules apply (§2.3 vs. 4th ed. Appendix B).
+    edition: Edition,
 }
 
 impl<'a> Lexer<'a> {
@@ -25,7 +27,14 @@ impl<'a> Lexer<'a> {
             src: src.as_bytes(),
             pos: Position::start(),
             first_invalid: first_invalid_char(src),
+            edition: Edition::default(),
         }
+    }
+
+    /// Select the XML 1.0 edition whose Name rules apply. Default: Fifth.
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self
     }
 
     /// Line/column of an arbitrary byte offset, for errors reported away
@@ -63,7 +72,9 @@ impl<'a> Lexer<'a> {
     }
 
     /// Skip XML whitespace per §2.3 [Production 3]: S ::= (#x20 | #x9 | #xD | #xA)+
-    fn skip_whitespace(&mut self) {
+    /// Returns whether any was skipped, for productions where S is required.
+    fn skip_whitespace(&mut self) -> bool {
+        let start = self.pos.byte_offset;
         while let Some(c) = self.current() {
             if matches!(c, b' ' | b'\t' | b'\r' | b'\n') {
                 self.bump();
@@ -71,6 +82,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.pos.byte_offset != start
     }
 
     /// Return the slice from `start` to current byte offset.
@@ -82,34 +94,17 @@ impl<'a> Lexer<'a> {
         std::str::from_utf8(&self.src[start..self.pos.byte_offset]).unwrap_or("")
     }
 
-    /// Per §2.3 [Production 4]: NameStartChar — full Unicode ranges.
-    pub(crate) fn is_name_start_char(c: char) -> bool {
-        matches!(c,
-            ':' | '_' | 'A'..='Z' | 'a'..='z' |
-            '\u{C0}'..='\u{D6}'    | '\u{D8}'..='\u{F6}'   |
-            '\u{F8}'..='\u{2FF}'   | '\u{370}'..='\u{37D}' |
-            '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' |
-            '\u{2070}'..='\u{218F}'| '\u{2C00}'..='\u{2FEF}' |
-            '\u{3001}'..='\u{D7FF}'| '\u{F900}'..='\u{FDCF}' |
-            '\u{FDF0}'..='\u{FFFD}'| '\u{10000}'..='\u{EFFFF}'
-        )
-    }
-
-    /// Per §2.3 [Production 4a]: NameChar = NameStartChar | "-" | "." |
-    /// [0-9] | #xB7 | [#x0300-#x036F] | [#x203F-#x2040].
-    pub(crate) fn is_name_char(c: char) -> bool {
-        Self::is_name_start_char(c) || matches!(c,
-            '-' | '.' | '0'..='9' | '\u{B7}' |
-            '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}'
-        )
-    }
-
     /// Decode the char at the current byte position. UTF-8 codepoints are
     /// 1–4 bytes; the lead byte gives the length. (Decoding a fixed 4-byte
     /// window instead fails whenever the window ends mid-codepoint, e.g.
     /// the `x>€` in `<x>€</x>`.)
     fn current_char(&self) -> Option<(char, usize)> {
-        let bytes = &self.src[self.pos.byte_offset..];
+        self.char_at(self.pos.byte_offset)
+    }
+
+    /// Decode the char starting at `offset` (see `current_char`).
+    fn char_at(&self, offset: usize) -> Option<(char, usize)> {
+        let bytes = self.src.get(offset..)?;
         let len = match *bytes.first()? {
             0x00..=0x7F => 1,
             0xC0..=0xDF => 2,
@@ -139,12 +134,12 @@ impl<'a> Lexer<'a> {
     fn scan_name(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         match self.current_char() {
-            Some((c, len)) if Self::is_name_start_char(c) => self.bump_char(len),
+            Some((c, len)) if is_name_start_char(c, self.edition) => self.bump_char(len),
             Some((c, _))   => return Err(XmlError::InvalidChar { pos: self.pos, char: c }),
             None           => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "Name" }),
         }
         while let Some((c, len)) = self.current_char() {
-            if Self::is_name_char(c) { self.bump_char(len); } else { break; }
+            if is_name_char(c, self.edition) { self.bump_char(len); } else { break; }
         }
         Ok(self.slice(start))
     }
@@ -229,8 +224,15 @@ impl<'a> Lexer<'a> {
     /// `<?target ...?>`. The leading `<?` has been consumed; the target is
     /// scanned by the caller.
     fn scan_pi_body(&mut self) -> Result<&'a str> {
-        // Optionally skip whitespace between target and body
-        self.skip_whitespace();
+        // PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
+        // so the target is followed by either '?>' or whitespace.
+        let at_close = self.current() == Some(b'?') && self.peek(1) == Some(b'>');
+        if !at_close && !self.skip_whitespace() {
+            return Err(XmlError::NotWellFormed {
+                pos: self.pos,
+                reason: "expected whitespace or '?>' after processing instruction target".into(),
+            });
+        }
         let start = self.pos.byte_offset;
         loop {
             if self.is_eof() {
@@ -326,7 +328,8 @@ impl<'a> Lexer<'a> {
         let name = self.scan_name()?;
         let mut attributes = Vec::new();
         loop {
-            self.skip_whitespace();
+            // §3.1 [Production 40]: STag ::= '<' Name (S Attribute)* S? '>'
+            let had_space = self.skip_whitespace();
             match self.current() {
                 Some(b'>') => {
                     self.bump();
@@ -342,7 +345,12 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     return Ok(Token::EmptyTag { name, attributes });
                 }
-                Some(c) if Self::is_name_start_char(c as char) => {
+                Some(_) if self.current_char().is_some_and(|(c, _)| is_name_start_char(c, self.edition)) => {
+                    if !had_space {
+                        return Err(XmlError::NotWellFormed {
+                            pos: self.pos, reason: "whitespace required before attribute".into(),
+                        });
+                    }
                     let attr_pos = self.pos;
                     let aname = self.scan_name()?;
                     self.skip_whitespace();
@@ -423,7 +431,7 @@ impl<'a> Lexer<'a> {
         if self.src[self.pos.byte_offset..].starts_with(kw) {
             // Make sure it's not a prefix of a longer name
             let after = self.pos.byte_offset + kw.len();
-            if after >= self.src.len() || !Self::is_name_char(self.src[after] as char) {
+            if !self.char_at(after).is_some_and(|(c, _)| is_name_char(c, self.edition)) {
                 self.pos.byte_offset += kw.len();
                 self.pos.column += kw.len() as u32;
                 return true;
