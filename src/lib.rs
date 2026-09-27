@@ -4,6 +4,7 @@
 //! [`METHODOLOGY.md`](../METHODOLOGY.md) at the crate root for the
 //! clean-room declaration and audit trail.
 
+mod chars;
 pub mod error;
 pub mod token;
 pub mod lexer;

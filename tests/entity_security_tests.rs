@@ -139,3 +139,104 @@ fn builtin_entities_without_dtd() {
     let mut p = Parser::new(payload);
     drain(&mut p).expect("built-in entities don't need DTD");
 }
+
+// -- XML 1.0 §2.2 Char validation for numeric character references --------
+//
+// Prior to fixing entities.rs:119, every `&#…;` was charged a flat 4 bytes
+// against the budget and no validation of the codepoint itself was
+// performed — so out-of-range and non-Char references slipped through.
+// Each ref below sits inside an entity value to exercise the validation
+// path in `entities.rs`. Refs directly in document content go through the
+// lexer; both share `chars::decode_char_ref` and are covered in
+// well_formedness_tests.rs.
+
+/// Sebastian's example: the maximum valid XML Char (U+10FFFF), 4-byte UTF-8.
+#[test]
+fn numeric_ref_max_unicode_is_valid() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY max "&#x10FFFF;">
+]>
+<x>&max;</x>"#;
+    let mut p = Parser::new(payload);
+    drain(&mut p).expect("U+10FFFF must be valid per XML 1.0 §2.2");
+}
+
+/// One past the top of the Unicode scalar range — must reject.
+#[test]
+fn numeric_ref_above_unicode_is_rejected() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY over "&#x110000;">
+]>
+<x>&over;</x>"#;
+    let mut p = Parser::new(payload);
+    assert!(drain(&mut p).is_err(), "&#x110000; is above U+10FFFF and must be rejected");
+}
+
+/// Surrogate code points are never valid XML Chars.
+#[test]
+fn numeric_ref_surrogate_is_rejected() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY sur "&#xD800;">
+]>
+<x>&sur;</x>"#;
+    let mut p = Parser::new(payload);
+    assert!(drain(&mut p).is_err(), "&#xD800; (surrogate) must be rejected");
+}
+
+/// NUL is not in the §2.2 Char production — must reject.
+#[test]
+fn numeric_ref_nul_is_rejected() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY n "&#x0;">
+]>
+<x>&n;</x>"#;
+    let mut p = Parser::new(payload);
+    assert!(drain(&mut p).is_err(), "&#x0; (NUL) is not a valid XML Char and must be rejected");
+}
+
+/// #xFFFE is excluded from §2.2 Char — must reject.
+#[test]
+fn numeric_ref_noncharacter_fffe_is_rejected() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY nc "&#xFFFE;">
+]>
+<x>&nc;</x>"#;
+    let mut p = Parser::new(payload);
+    assert!(drain(&mut p).is_err(), "&#xFFFE; (non-character) must be rejected");
+}
+
+/// ASCII character references should cost their actual UTF-8 length (1 byte),
+/// not the hardcoded 4 the old code charged. Four refs expand to "ABCD"
+/// (4 bytes). Under the old accounting they would consume 16 bytes against
+/// the budget; under the new accounting they consume 4. A 10-byte budget
+/// passes under the new accounting and would have failed under the old.
+#[test]
+fn numeric_ref_ascii_costs_one_byte_not_four() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY a "&#x41;&#x42;&#x43;&#x44;">
+]>
+<x>&a;</x>"#;
+    let mut p = Parser::new(payload).with_expansion_limits(ExpansionLimits {
+        max_depth: 20,
+        max_expanded_bytes: 10,
+    });
+    drain(&mut p).expect("4 ASCII char refs (4 bytes expanded) must fit in a 10-byte budget");
+}
+
+/// `u32::from_str_radix` accepts a leading '+'; Production 66 does not.
+#[test]
+fn numeric_ref_with_plus_sign_is_rejected() {
+    let payload = r#"<?xml version="1.0"?>
+<!DOCTYPE x [
+  <!ENTITY p "&#+65;">
+]>
+<x>&p;</x>"#;
+    let mut p = Parser::new(payload);
+    assert!(drain(&mut p).is_err(), "&#+65; is not a legal CharRef and must be rejected");
+}
