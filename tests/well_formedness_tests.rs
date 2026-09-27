@@ -241,3 +241,62 @@ fn attributes_need_whitespace_between() {
     events("<x a='1' b='2'/>").expect("space-separated attributes");
     assert!(events("<x a='1'b='2'/>").is_err(), "missing S between attributes");
 }
+
+// ─── §2.8 XML declaration ────────────────────────────────────────────────────
+
+#[test]
+fn xml_declaration_forms() {
+    for doc in [
+        "<?xml version='1.0'?><x/>",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><x/>",
+        "<?xml version = '1.0' encoding = 'ISO-8859-1' standalone = 'yes' ?><x/>",
+        "<?xml version='1.0' standalone='no'?><x/>",
+        "\u{FEFF}<?xml version='1.0'?><x/>",
+        "\u{FEFF}<x/>",
+    ] {
+        events(doc).unwrap_or_else(|e| panic!("rejected {doc:?}: {e}"));
+    }
+    for doc in [
+        " <?xml version='1.0'?><x/>",                         // not at start
+        "<!-- c --><?xml version='1.0'?><x/>",
+        "<x/><?xml version='1.0'?>",
+        "<?XML version='1.0'?><x/>",                          // case matters
+        "<?xml encoding='UTF-8'?><x/>",                       // version required
+        "<?xml version='1.0' standalone='yes' encoding='UTF-8'?><x/>", // order
+        "<?xml version='1.0'encoding='UTF-8'?><x/>",          // S required
+        "<?xml version='1.0' encoding='UTF-8'standalone='yes'?><x/>",
+        "<?xml version='1 .0'?><x/>",
+        "<?xml version='#1.0'?><x/>",
+        "<?xml version='1.0' encoding='_utf8'?><x/>",
+        "<?xml version='1.0' encoding='UTF 8'?><x/>",
+        "<?xml version='1.0' encoding='a/b'?><x/>",
+        "<?xml version='1.0' standalone='YES'?><x/>",
+        "<x><?xmL pi?></x>",                                  // reserved target
+    ] {
+        assert!(events(doc).is_err(), "accepted {doc:?}");
+    }
+}
+
+#[test]
+fn version_number_follows_edition() {
+    use expat_rs::Edition;
+    let run = |doc: &str, ed| {
+        let mut p = Parser::new(doc).with_edition(ed);
+        while p.next_event()?.is_some() {}
+        Ok::<_, XmlError>(())
+    };
+    run("<?xml version='1.1'?><x/>", Edition::Fifth).expect("5th ed.: '1.' [0-9]+");
+    assert!(run("<?xml version='1.1'?><x/>", Edition::Fourth).is_err(), "4th ed.: only '1.0'");
+    assert!(run("<?xml version='2.0'?><x/>", Edition::Fifth).is_err());
+}
+
+// ─── §3.1 references in attribute values ─────────────────────────────────────
+
+#[test]
+fn attribute_value_references() {
+    events("<x a='&amp;&lt;&#65;&#x42;'/>").expect("legal references in AttValue");
+    for doc in ["<x a='&'/>", "<x a='a & b'/>", "<x a='&amp'/>", "<x a='&#65'/>",
+                "<x a='&#x0;'/>", "<x a='&#5~0;'/>", "<x a='&#xFFFE;'/>"] {
+        assert!(events(doc).is_err(), "accepted {doc:?}");
+    }
+}
