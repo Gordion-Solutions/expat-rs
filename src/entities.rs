@@ -19,6 +19,7 @@
 //! the parser allocate unbounded memory.
 
 use std::collections::HashMap;
+use crate::chars::decode_char_ref;
 use crate::error::{Position, Result, XmlError};
 
 /// Hard limits on entity expansion. Defaults match the conservative end of
@@ -114,9 +115,13 @@ impl EntityTable {
                     })?;
                 let added = if let Some(s) = builtin_entity(inner) {
                     s.len()
-                } else if inner.starts_with('#') {
-                    // Numeric character reference — at most 4 bytes (one Unicode codepoint)
-                    4
+                } else if let Some(body) = inner.strip_prefix('#') {
+                    // Numeric character reference — validate, and charge its
+                    // real UTF-8 length against the budget.
+                    let c = decode_char_ref(body).map_err(|reason| XmlError::NotWellFormed {
+                        pos, reason: format!("{reason} in entity {name:?}"),
+                    })?;
+                    c.len_utf8()
                 } else {
                     // Recursive entity reference
                     self.validate_recursive(inner, depth_remaining - 1, budget, pos)?

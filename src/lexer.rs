@@ -7,12 +7,18 @@
 //! Implements the lexical rules of W3C XML 1.0 (Fifth Edition) §2 and §3.
 //! Each non-trivial scan function carries a spec citation.
 
+use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: Position,
+    /// First character in the input that is not a §2.2 Char. Found with one
+    /// up-front scan; reported as soon as a token reaches past it.
+    first_invalid: Option<(usize, char)>,
+    /// Which edition's Name rules apply (§2.3 vs. 4th ed. Appendix B).
+    edition: Edition,
 }
 
 impl<'a> Lexer<'a> {
@@ -20,7 +26,25 @@ impl<'a> Lexer<'a> {
         Self {
             src: src.as_bytes(),
             pos: Position::start(),
+            first_invalid: first_invalid_char(src),
+            edition: Edition::default(),
         }
+    }
+
+    /// Select the XML 1.0 edition whose Name rules apply. Default: Fifth.
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self
+    }
+
+    /// Line/column of an arbitrary byte offset, for errors reported away
+    /// from the current position.
+    fn position_at(&self, byte_offset: usize) -> Position {
+        let before = &self.src[..byte_offset];
+        let line = 1 + before.iter().filter(|&&b| b == b'\n').count() as u32;
+        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
+        Position { line, column, byte_offset }
     }
 
     /// Advance past one byte, updating line/column.
@@ -48,7 +72,9 @@ impl<'a> Lexer<'a> {
     }
 
     /// Skip XML whitespace per §2.3 [Production 3]: S ::= (#x20 | #x9 | #xD | #xA)+
-    fn skip_whitespace(&mut self) {
+    /// Returns whether any was skipped, for productions where S is required.
+    fn skip_whitespace(&mut self) -> bool {
+        let start = self.pos.byte_offset;
         while let Some(c) = self.current() {
             if matches!(c, b' ' | b'\t' | b'\r' | b'\n') {
                 self.bump();
@@ -56,6 +82,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
+        self.pos.byte_offset != start
     }
 
     /// Return the slice from `start` to current byte offset.
@@ -67,35 +94,24 @@ impl<'a> Lexer<'a> {
         std::str::from_utf8(&self.src[start..self.pos.byte_offset]).unwrap_or("")
     }
 
-    /// Per §2.3 [Production 4]: NameStartChar — full Unicode ranges.
-    pub(crate) fn is_name_start_char(c: char) -> bool {
-        matches!(c,
-            ':' | '_' | 'A'..='Z' | 'a'..='z' |
-            '\u{C0}'..='\u{D6}'    | '\u{D8}'..='\u{F6}'   |
-            '\u{F8}'..='\u{2FF}'   | '\u{370}'..='\u{37D}' |
-            '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}' |
-            '\u{2070}'..='\u{218F}'| '\u{2C00}'..='\u{2FEF}' |
-            '\u{3001}'..='\u{D7FF}'| '\u{F900}'..='\u{FDCF}' |
-            '\u{FDF0}'..='\u{FFFD}'| '\u{10000}'..='\u{EFFFF}'
-        )
-    }
-
-    /// Per §2.3 [Production 4a]: NameChar = NameStartChar | "-" | "." |
-    /// [0-9] | #xB7 | [#x0300-#x036F] | [#x203F-#x2040].
-    pub(crate) fn is_name_char(c: char) -> bool {
-        Self::is_name_start_char(c) || matches!(c,
-            '-' | '.' | '0'..='9' | '\u{B7}' |
-            '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}'
-        )
-    }
-
     /// Decode the char at the current byte position. UTF-8 codepoints are
-    /// 1–4 bytes; we look ahead at most 4 bytes.
+    /// 1–4 bytes; the lead byte gives the length. (Decoding a fixed 4-byte
+    /// window instead fails whenever the window ends mid-codepoint, e.g.
+    /// the `x>€` in `<x>€</x>`.)
     fn current_char(&self) -> Option<(char, usize)> {
-        let bytes = &self.src[self.pos.byte_offset..];
-        if bytes.is_empty() { return None; }
-        let chunk = &bytes[..bytes.len().min(4)];
-        let s = std::str::from_utf8(chunk).ok()?;
+        self.char_at(self.pos.byte_offset)
+    }
+
+    /// Decode the char starting at `offset` (see `current_char`).
+    fn char_at(&self, offset: usize) -> Option<(char, usize)> {
+        let bytes = self.src.get(offset..)?;
+        let len = match *bytes.first()? {
+            0x00..=0x7F => 1,
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            _           => 4,
+        };
+        let s = std::str::from_utf8(bytes.get(..len)?).ok()?;
         let c = s.chars().next()?;
         Some((c, c.len_utf8()))
     }
@@ -118,12 +134,12 @@ impl<'a> Lexer<'a> {
     fn scan_name(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         match self.current_char() {
-            Some((c, len)) if Self::is_name_start_char(c) => self.bump_char(len),
+            Some((c, len)) if is_name_start_char(c, self.edition) => self.bump_char(len),
             Some((c, _))   => return Err(XmlError::InvalidChar { pos: self.pos, char: c }),
             None           => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "Name" }),
         }
         while let Some((c, len)) = self.current_char() {
-            if Self::is_name_char(c) { self.bump_char(len); } else { break; }
+            if is_name_char(c, self.edition) { self.bump_char(len); } else { break; }
         }
         Ok(self.slice(start))
     }
@@ -208,8 +224,15 @@ impl<'a> Lexer<'a> {
     /// `<?target ...?>`. The leading `<?` has been consumed; the target is
     /// scanned by the caller.
     fn scan_pi_body(&mut self) -> Result<&'a str> {
-        // Optionally skip whitespace between target and body
-        self.skip_whitespace();
+        // PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'
+        // so the target is followed by either '?>' or whitespace.
+        let at_close = self.current() == Some(b'?') && self.peek(1) == Some(b'>');
+        if !at_close && !self.skip_whitespace() {
+            return Err(XmlError::NotWellFormed {
+                pos: self.pos,
+                reason: "expected whitespace or '?>' after processing instruction target".into(),
+            });
+        }
         let start = self.pos.byte_offset;
         loop {
             if self.is_eof() {
@@ -226,6 +249,17 @@ impl<'a> Lexer<'a> {
 
     /// Top-level: produce the next token, or `Ok(None)` at end of input.
     pub fn next_token(&mut self) -> Result<Option<Token<'a>>> {
+        let tok = self.scan_token()?;
+        // Per §2.2: every character in the document must match Char.
+        if let Some((offset, c)) = self.first_invalid {
+            if offset < self.pos.byte_offset {
+                return Err(XmlError::InvalidChar { pos: self.position_at(offset), char: c });
+            }
+        }
+        Ok(tok)
+    }
+
+    fn scan_token(&mut self) -> Result<Option<Token<'a>>> {
         if self.is_eof() {
             return Ok(None);
         }
@@ -294,7 +328,8 @@ impl<'a> Lexer<'a> {
         let name = self.scan_name()?;
         let mut attributes = Vec::new();
         loop {
-            self.skip_whitespace();
+            // §3.1 [Production 40]: STag ::= '<' Name (S Attribute)* S? '>'
+            let had_space = self.skip_whitespace();
             match self.current() {
                 Some(b'>') => {
                     self.bump();
@@ -310,7 +345,12 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     return Ok(Token::EmptyTag { name, attributes });
                 }
-                Some(c) if Self::is_name_start_char(c as char) => {
+                Some(_) if self.current_char().is_some_and(|(c, _)| is_name_start_char(c, self.edition)) => {
+                    if !had_space {
+                        return Err(XmlError::NotWellFormed {
+                            pos: self.pos, reason: "whitespace required before attribute".into(),
+                        });
+                    }
                     let attr_pos = self.pos;
                     let aname = self.scan_name()?;
                     self.skip_whitespace();
@@ -391,7 +431,7 @@ impl<'a> Lexer<'a> {
         if self.src[self.pos.byte_offset..].starts_with(kw) {
             // Make sure it's not a prefix of a longer name
             let after = self.pos.byte_offset + kw.len();
-            if after >= self.src.len() || !Self::is_name_char(self.src[after] as char) {
+            if !self.char_at(after).is_some_and(|(c, _)| is_name_char(c, self.edition)) {
                 self.pos.byte_offset += kw.len();
                 self.pos.column += kw.len() as u32;
                 return true;
@@ -462,15 +502,10 @@ impl<'a> Lexer<'a> {
         self.bump();
         if self.current() == Some(b'#') {
             self.bump();
-            let (radix, num_start) = if self.current() == Some(b'x') {
-                self.bump();
-                (16, self.pos.byte_offset)
-            } else {
-                (10, self.pos.byte_offset)
-            };
+            let body_start = self.pos.byte_offset;
             while let Some(c) = self.current() {
                 if c == b';' { break; }
-                if !c.is_ascii_hexdigit() {
+                if !(c.is_ascii_alphanumeric()) {
                     return Err(XmlError::NotWellFormed {
                         pos: self.pos,
                         reason: format!("invalid character {:?} in numeric character reference", c as char),
@@ -478,17 +513,12 @@ impl<'a> Lexer<'a> {
                 }
                 self.bump();
             }
-            let digits = std::str::from_utf8(&self.src[num_start..self.pos.byte_offset]).unwrap_or("");
             if self.current() != Some(b';') {
                 return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected ';' to close character reference".into() });
             }
+            let body = self.slice(body_start);
+            let c = decode_char_ref(body).map_err(|reason| XmlError::NotWellFormed { pos: self.pos, reason })?;
             self.bump();
-            let n = u32::from_str_radix(digits, radix).map_err(|_| XmlError::NotWellFormed {
-                pos: self.pos, reason: format!("invalid numeric reference {digits:?}"),
-            })?;
-            let c = char::from_u32(n).ok_or(XmlError::NotWellFormed {
-                pos: self.pos, reason: format!("character reference {n:#x} is not a valid Unicode scalar"),
-            })?;
             Ok(Token::CharRef(c))
         } else {
             let name = self.scan_name()?;

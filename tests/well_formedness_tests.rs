@@ -160,3 +160,84 @@ fn pi_in_prolog_and_epilog() {
     }).collect();
     assert_eq!(pi_targets, vec!["xml-stylesheet", "gen"]);
 }
+
+// ─── §2.2 Char / §4.1 Legal Character WFC ────────────────────────────────────
+
+#[test]
+fn char_ref_in_content_valid_range() {
+    events("<x>&#65;&#x10FFFF;&#x9;</x>").expect("legal Chars by reference");
+}
+
+#[test]
+fn char_ref_in_content_illegal_chars_rejected() {
+    for r in ["&#0;", "&#x0;", "&#x1F;", "&#xD800;", "&#xFFFE;", "&#xFFFF;", "&#x110000;"] {
+        let doc = format!("<x>{r}</x>");
+        assert!(events(&doc).is_err(), "{r} must be rejected (Legal Character WFC)");
+    }
+}
+
+#[test]
+fn char_ref_in_content_malformed_rejected() {
+    for r in ["&#;", "&#x;", "&#X41;", "&#+65;", "&#6a;", "&#xG1;"] {
+        let doc = format!("<x>{r}</x>");
+        assert!(events(&doc).is_err(), "{r} is not a legal CharRef");
+    }
+}
+
+#[test]
+fn literal_illegal_chars_rejected_everywhere() {
+    for c in ['\u{0}', '\u{1}', '\u{B}', '\u{C}', '\u{1F}', '\u{FFFE}', '\u{FFFF}'] {
+        for doc in [
+            format!("<x>{c}</x>"),
+            format!("<x a=\"{c}\"/>"),
+            format!("<x><!--{c}--></x>"),
+            format!("<x><?pi {c}?></x>"),
+            format!("<x><![CDATA[{c}]]></x>"),
+            format!("<x/><!--{c}-->"),
+        ] {
+            match events(&doc) {
+                Err(XmlError::InvalidChar { char, .. }) => assert_eq!(char, c),
+                other => panic!("{doc:?}: expected InvalidChar, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn illegal_char_position_is_reported() {
+    match events("<x>\n  ok\u{1}</x>") {
+        Err(XmlError::InvalidChar { pos, .. }) => {
+            assert_eq!((pos.line, pos.column, pos.byte_offset), (2, 5, 8));
+        }
+        other => panic!("expected InvalidChar, got {other:?}"),
+    }
+}
+
+#[test]
+fn legal_whitespace_controls_accepted() {
+    events("<x a=\"\t\r\n\">\t\r\n</x>").expect("TAB, CR, LF are legal Chars");
+}
+
+/// Regression: the lexer used to decode a fixed 4-byte window after a name,
+/// which fails when the window ends mid-codepoint (`x>` + 2 of €'s 3 bytes).
+#[test]
+fn multibyte_char_right_after_short_name() {
+    events("<x>€</x>").expect("3-byte char after a 1-char name");
+    events("<ab>𝄞</ab>").expect("4-byte char after a 2-char name");
+    events("<x a='€'/>").expect("3-byte char in attribute after short name");
+}
+
+/// §2.6: PITarget must be followed by whitespace or `?>`.
+#[test]
+fn pi_target_needs_whitespace_before_body() {
+    events("<x><?pi?></x>").expect("empty PI");
+    events("<x><?pi data?></x>").expect("PI with body");
+    assert!(events("<x><?a%b?></x>").is_err(), "'%' is not a NameChar and no S follows target");
+}
+
+/// §3.1 [Production 40]: attributes are separated by required whitespace.
+#[test]
+fn attributes_need_whitespace_between() {
+    events("<x a='1' b='2'/>").expect("space-separated attributes");
+    assert!(events("<x a='1'b='2'/>").is_err(), "missing S between attributes");
+}

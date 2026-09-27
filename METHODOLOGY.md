@@ -16,6 +16,10 @@ The implementation is derived **only** from:
 4. **[Annotated XML 1.0 specification](https://www.xml.com/axml/testaxml.htm)**
    by Tim Bray — the canonical commentary on the spec, used to disambiguate
    intent where the normative text is terse.
+5. **[W3C XML 1.0 (Fourth Edition) Recommendation](https://www.w3.org/TR/2006/REC-xml-20060816/)**
+   — Appendix B character classes only, for `Edition::Fourth` name rules.
+   `src/edition4.rs` is generated from the spec text by
+   `tools/gen_edition4_tables.py`; nothing in it is hand-written.
 
 ## Reference materials NOT consulted
 
