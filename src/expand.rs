@@ -19,11 +19,18 @@
 //! Expansion is bounded by `ExpansionLimits` (depth and bytes) against
 //! billion-laughs and quadratic-blowup payloads.
 
+use std::borrow::Cow;
+
 use crate::chars::{decode_char_ref, is_name_char, is_name_start_char, Edition};
 use crate::entities::{builtin_entity, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{Position, Result, XmlError};
 use crate::lexer::Lexer;
+use crate::event::{normalize_newlines, Attribute, Event};
 use crate::token::Token;
+
+fn owned(s: &str) -> Cow<'static, str> {
+    Cow::Owned(s.to_string())
+}
 
 /// Loads the text of an external parsed entity from its system and public
 /// identifiers: `Ok(Some(text))`, `Ok(None)` to leave it unread, or
@@ -44,6 +51,8 @@ pub(crate) struct Expander<'e, 'l> {
     pub expanded: usize,
     /// Entities currently being expanded, outermost first.
     stack: Vec<String>,
+    /// Events produced by expanding content entities, in document order.
+    pub events: Vec<Event<'static>>,
 }
 
 impl<'e, 'l> Expander<'e, 'l> {
@@ -55,7 +64,10 @@ impl<'e, 'l> Expander<'e, 'l> {
         loader: Option<&'e mut ExternalLoader<'l>>,
         pos: Position,
     ) -> Self {
-        Self { table, limits, edition, entity_declared_wfc, loader, pos, expanded: 0, stack: Vec::new() }
+        Self {
+            table, limits, edition, entity_declared_wfc, loader, pos,
+            expanded: 0, stack: Vec::new(), events: Vec::new(),
+        }
     }
 
     fn error(&self, reason: String) -> XmlError {
@@ -103,13 +115,19 @@ impl<'e, 'l> Expander<'e, 'l> {
         Ok(())
     }
 
-    /// Check an entity reference that appears in content.
+    /// Check an entity reference that appears in content, collecting the
+    /// events its replacement text produces into `self.events`.
     pub fn check_content_entity(&mut self, name: &str) -> Result<()> {
-        if builtin_entity(name).is_some() {
+        if let Some(text) = builtin_entity(name) {
+            self.events.push(Event::Text(Cow::Borrowed(text)));
             return Ok(());
         }
         match self.table.get(name) {
-            None => self.undeclared(name),
+            None => {
+                self.undeclared(name)?;
+                self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
+                Ok(())
+            }
             Some(EntityDef::External { unparsed: true, .. }) => {
                 Err(self.error(format!("reference to unparsed entity {name:?} in content (Parsed Entity)")))
             }
@@ -122,12 +140,18 @@ impl<'e, 'l> Expander<'e, 'l> {
                 };
                 match loaded {
                     Some(text) => {
+                        // §2.11 applies to the entity's input text.
+                        let text = normalize_newlines(&text);
                         self.enter(name, text.len())?;
                         self.check_content_text(name, &text, true)?;
                         self.leave();
                         Ok(())
                     }
-                    None => Ok(()), // not read (§4.4.3)
+                    None => {
+                        // Not read (§4.4.3).
+                        self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
+                        Ok(())
+                    }
                 }
             }
             Some(EntityDef::Internal(text)) => {
@@ -140,7 +164,9 @@ impl<'e, 'l> Expander<'e, 'l> {
     }
 
     /// Replacement text must match `content` (§4.3.2): tokenise it on its
-    /// own, with its own tag stack, and recurse into references.
+    /// own, with its own tag stack, and recurse into references. Line
+    /// endings in `text` are already normalised, and any CR left in it came
+    /// from a character reference, so token text is used as is.
     fn check_content_text(&mut self, name: &str, text: &str, external: bool) -> Result<()> {
         let pos = self.pos;
         let in_entity = |e: XmlError| XmlError::NotWellFormed {
@@ -155,21 +181,32 @@ impl<'e, 'l> Expander<'e, 'l> {
         while let Some(tok) = lexer.next_token().map_err(in_entity)? {
             match tok {
                 Token::StartTag { name: tag, attributes } => {
-                    self.check_tag_attrs(&attributes)?;
+                    let attributes = self.tag_attributes(&attributes)?;
+                    self.events.push(Event::StartElement { name: owned(tag), attributes });
                     open.push(tag);
                 }
-                Token::EmptyTag { attributes, .. } => self.check_tag_attrs(&attributes)?,
+                Token::EmptyTag { name: tag, attributes } => {
+                    let attributes = self.tag_attributes(&attributes)?;
+                    self.events.push(Event::StartElement { name: owned(tag), attributes });
+                    self.events.push(Event::EndElement(owned(tag)));
+                }
                 Token::EndTag(tag) => match open.pop() {
-                    Some(start) if start == tag => {}
+                    Some(start) if start == tag => self.events.push(Event::EndElement(owned(tag))),
                     _ => return Err(self.error(format!(
                         "end tag </{tag}> in entity {name:?} has no matching start tag in the same entity"))),
                 },
                 Token::EntityRef(inner) => self.check_content_entity(inner)?,
+                Token::CharRef(c) => self.events.push(Event::Text(Cow::Owned(c.to_string()))),
+                Token::Text(t) => self.events.push(Event::Text(owned(t))),
+                Token::CData(t) => self.events.push(Event::CData(owned(t))),
+                Token::Comment(t) => self.events.push(Event::Comment(owned(t))),
+                Token::ProcessingInstruction { target, body } => {
+                    self.events.push(Event::ProcessingInstruction { target: owned(target), body: owned(body) });
+                }
                 Token::XmlDecl(_) => return Err(self.error(format!(
                     "XML or text declaration not allowed in the replacement text of entity {name:?}"))),
                 Token::Doctype { .. } => return Err(self.error(format!(
                     "DOCTYPE not allowed in the replacement text of entity {name:?}"))),
-                _ => {}
             }
         }
         if let Some(tag) = open.last() {
@@ -178,9 +215,14 @@ impl<'e, 'l> Expander<'e, 'l> {
         Ok(())
     }
 
-    fn check_tag_attrs(&mut self, attributes: &[crate::token::Attr<'_>]) -> Result<()> {
+    /// Check the attributes of a start tag inside an entity and build their
+    /// event form.
+    fn tag_attributes(&mut self, attributes: &[crate::token::Attr<'_>]) -> Result<Vec<Attribute<'static>>> {
         crate::parser::check_unique_attrs(attributes, self.pos)?;
-        attributes.iter().try_for_each(|a| self.check_attr_value(a.value))
+        attributes.iter().map(|a| {
+            self.check_attr_value(a.value)?;
+            Ok(Attribute { name: owned(a.name), value: owned(a.value), specified: true })
+        }).collect()
     }
 
     fn undeclared(&self, name: &str) -> Result<()> {

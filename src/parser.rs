@@ -57,6 +57,9 @@ pub struct Parser<'a> {
     /// Caller-supplied loader for external parsed entities. `None` (the
     /// default) never reads anything outside the document.
     loader: Option<Box<ExternalLoader<'a>>>,
+    /// Events from an expanded entity reference, delivered before the
+    /// next token is read.
+    queued: std::collections::VecDeque<Event<'a>>,
     expansion_limits: ExpansionLimits,
     /// Cumulative bytes of expanded entity content seen so far in this
     /// document. The per-reference budget alone doesn't catch the
@@ -80,6 +83,7 @@ impl<'a> Parser<'a> {
             standalone: None,
             entity_declared_wfc: true,
             loader: None,
+            queued: std::collections::VecDeque::new(),
             expansion_limits: ExpansionLimits::default(),
             expanded_bytes_total: 0,
         }
@@ -119,6 +123,9 @@ impl<'a> Parser<'a> {
 
     /// Produce the next event, or `Ok(None)` at end of well-formed input.
     pub fn next_event(&mut self) -> Result<Option<Event<'a>>> {
+        if let Some(e) = self.queued.pop_front() {
+            return Ok(Some(e));
+        }
         if let Some(name) = self.pending_end.take() {
             // Pop the matching push from the EmptyTag handler and advance to
             // Epilog if this closed the root.
@@ -136,8 +143,11 @@ impl<'a> Parser<'a> {
             };
 
             match self.handle(tok)? {
-                None    => continue, // event was consumed/folded — keep going
                 Some(e) => return Ok(Some(e)),
+                // Folded away, or expanded into queued events.
+                None => if let Some(e) = self.queued.pop_front() {
+                    return Ok(Some(e));
+                },
             }
         }
     }
@@ -356,12 +366,13 @@ impl<'a> Parser<'a> {
                 if let Some(text) = crate::entities::builtin_entity(name) {
                     return Ok(Some(Event::Text(Cow::Borrowed(text))));
                 }
-                // Replacement text is checked and budgeted; its events are
-                // not surfaced yet.
+                // Replacement text is checked, budgeted, and its events
+                // queued in place of the reference.
                 let mut x = self.expander();
                 x.check_content_entity(name)?;
-                let used = x.expanded;
+                let (used, events) = (x.expanded, std::mem::take(&mut x.events));
                 self.charge(used)?;
+                self.queued.extend(events);
                 Ok(None)
             }
             Token::CharRef(c) => {

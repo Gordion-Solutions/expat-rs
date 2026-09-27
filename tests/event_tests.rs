@@ -55,3 +55,49 @@ fn borrowed_when_unchanged() {
     let es = events(src);
     assert!(es.iter().any(|e| matches!(e, Event::Text(std::borrow::Cow::Borrowed("plain text")))), "{es:?}");
 }
+
+// ─── entity references in content deliver their events ─────────────────────
+
+fn names(es: &[Event<'_>]) -> Vec<String> {
+    es.iter().filter_map(|e| match e {
+        Event::StartElement { name, .. } => Some(format!("<{name}>")),
+        Event::EndElement(name) => Some(format!("</{name}>")),
+        Event::Text(t) => Some(t.to_string()),
+        Event::SkippedEntity(n) => Some(format!("skipped:{n}")),
+        _ => None,
+    }).collect()
+}
+
+#[test]
+fn internal_entity_text_and_markup() {
+    let src = "<!DOCTYPE d [<!ENTITY e 'x<b a=\"1\">y</b><c/>&f;'><!ENTITY f 'z'>]><d>&e;!</d>";
+    assert_eq!(names(&events(src)), ["<d>", "x", "<b>", "y", "</b>", "<c>", "</c>", "z", "!", "</d>"]);
+}
+
+#[test]
+fn entity_value_line_endings_and_char_refs() {
+    // Literal CRLF in the entity value is normalised; &#13; survives.
+    assert_eq!(text("<!DOCTYPE d [<!ENTITY e 'a\r\nb&#13;c'>]><d>&e;</d>"), "a\nb\rc");
+    // Char refs in the value expand at declaration; &#38;amp; becomes &amp;
+    // in the replacement text, then '&' when parsed.
+    assert_eq!(text("<!DOCTYPE d [<!ENTITY e '&#38;amp;'>]><d>&e;</d>"), "&");
+}
+
+#[test]
+fn unread_entities_are_skipped_entities() {
+    assert_eq!(names(&events("<!DOCTYPE d [<!ENTITY e SYSTEM 'e.xml'>]><d>&e;</d>")),
+               ["<d>", "skipped:e", "</d>"]);
+    // Undeclared, where Entity Declared is only a validity constraint.
+    assert_eq!(names(&events("<!DOCTYPE d SYSTEM 'd.dtd'><d>&u;</d>")),
+               ["<d>", "skipped:u", "</d>"]);
+}
+
+#[test]
+fn loaded_external_entity_events() {
+    let src = "<!DOCTYPE d [<!ENTITY e SYSTEM 'e.xml'>]><d>&e;</d>";
+    let mut p = Parser::new(src)
+        .with_external_loader(|_, _| Ok(Some("<?xml encoding='UTF-8'?>ext\r\n<i/>".into())));
+    let mut es = Vec::new();
+    while let Some(e) = p.next_event().unwrap() { es.push(e); }
+    assert_eq!(names(&es), ["<d>", "ext\n", "<i>", "</i>", "</d>"]);
+}
