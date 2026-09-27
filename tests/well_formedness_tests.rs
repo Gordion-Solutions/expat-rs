@@ -26,10 +26,10 @@ fn smallest_well_formed_doc() {
 fn nested_elements_balanced() {
     let es = events("<a><b><c/></b></a>").unwrap();
     let opens: Vec<&str> = es.iter().filter_map(|e| match e {
-        Event::StartElement { name, .. } => Some(*name), _ => None,
+        Event::StartElement { name, .. } => Some(name.as_ref()), _ => None,
     }).collect();
     let closes: Vec<&str> = es.iter().filter_map(|e| match e {
-        Event::EndElement(n) => Some(*n), _ => None,
+        Event::EndElement(n) => Some(n.as_ref()), _ => None,
     }).collect();
     assert_eq!(opens, vec!["a", "b", "c"]);
     assert_eq!(closes, vec!["c", "b", "a"]);
@@ -155,7 +155,7 @@ fn entity_reference_outside_root_rejected() {
 fn pi_in_prolog_and_epilog() {
     let es = events("<?xml-stylesheet href=\"a.xsl\"?><r/><?gen done?>").unwrap();
     let pi_targets: Vec<&str> = es.iter().filter_map(|e| match e {
-        Event::ProcessingInstruction { target, .. } => Some(*target),
+        Event::ProcessingInstruction { target, .. } => Some(target.as_ref()),
         _ => None,
     }).collect();
     assert_eq!(pi_targets, vec!["xml-stylesheet", "gen"]);
