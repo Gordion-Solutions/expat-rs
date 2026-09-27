@@ -7,12 +7,16 @@
 //! Implements the lexical rules of W3C XML 1.0 (Fifth Edition) §2 and §3.
 //! Each non-trivial scan function carries a spec citation.
 
+use crate::chars::{decode_char_ref, first_invalid_char};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
 pub struct Lexer<'a> {
     src: &'a [u8],
     pos: Position,
+    /// First character in the input that is not a §2.2 Char. Found with one
+    /// up-front scan; reported as soon as a token reaches past it.
+    first_invalid: Option<(usize, char)>,
 }
 
 impl<'a> Lexer<'a> {
@@ -20,7 +24,18 @@ impl<'a> Lexer<'a> {
         Self {
             src: src.as_bytes(),
             pos: Position::start(),
+            first_invalid: first_invalid_char(src),
         }
+    }
+
+    /// Line/column of an arbitrary byte offset, for errors reported away
+    /// from the current position.
+    fn position_at(&self, byte_offset: usize) -> Position {
+        let before = &self.src[..byte_offset];
+        let line = 1 + before.iter().filter(|&&b| b == b'\n').count() as u32;
+        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
+        Position { line, column, byte_offset }
     }
 
     /// Advance past one byte, updating line/column.
@@ -90,12 +105,18 @@ impl<'a> Lexer<'a> {
     }
 
     /// Decode the char at the current byte position. UTF-8 codepoints are
-    /// 1–4 bytes; we look ahead at most 4 bytes.
+    /// 1–4 bytes; the lead byte gives the length. (Decoding a fixed 4-byte
+    /// window instead fails whenever the window ends mid-codepoint, e.g.
+    /// the `x>€` in `<x>€</x>`.)
     fn current_char(&self) -> Option<(char, usize)> {
         let bytes = &self.src[self.pos.byte_offset..];
-        if bytes.is_empty() { return None; }
-        let chunk = &bytes[..bytes.len().min(4)];
-        let s = std::str::from_utf8(chunk).ok()?;
+        let len = match *bytes.first()? {
+            0x00..=0x7F => 1,
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            _           => 4,
+        };
+        let s = std::str::from_utf8(bytes.get(..len)?).ok()?;
         let c = s.chars().next()?;
         Some((c, c.len_utf8()))
     }
@@ -226,6 +247,17 @@ impl<'a> Lexer<'a> {
 
     /// Top-level: produce the next token, or `Ok(None)` at end of input.
     pub fn next_token(&mut self) -> Result<Option<Token<'a>>> {
+        let tok = self.scan_token()?;
+        // Per §2.2: every character in the document must match Char.
+        if let Some((offset, c)) = self.first_invalid {
+            if offset < self.pos.byte_offset {
+                return Err(XmlError::InvalidChar { pos: self.position_at(offset), char: c });
+            }
+        }
+        Ok(tok)
+    }
+
+    fn scan_token(&mut self) -> Result<Option<Token<'a>>> {
         if self.is_eof() {
             return Ok(None);
         }
@@ -462,15 +494,10 @@ impl<'a> Lexer<'a> {
         self.bump();
         if self.current() == Some(b'#') {
             self.bump();
-            let (radix, num_start) = if self.current() == Some(b'x') {
-                self.bump();
-                (16, self.pos.byte_offset)
-            } else {
-                (10, self.pos.byte_offset)
-            };
+            let body_start = self.pos.byte_offset;
             while let Some(c) = self.current() {
                 if c == b';' { break; }
-                if !c.is_ascii_hexdigit() {
+                if !(c.is_ascii_alphanumeric()) {
                     return Err(XmlError::NotWellFormed {
                         pos: self.pos,
                         reason: format!("invalid character {:?} in numeric character reference", c as char),
@@ -478,17 +505,12 @@ impl<'a> Lexer<'a> {
                 }
                 self.bump();
             }
-            let digits = std::str::from_utf8(&self.src[num_start..self.pos.byte_offset]).unwrap_or("");
             if self.current() != Some(b';') {
                 return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected ';' to close character reference".into() });
             }
+            let body = self.slice(body_start);
+            let c = decode_char_ref(body).map_err(|reason| XmlError::NotWellFormed { pos: self.pos, reason })?;
             self.bump();
-            let n = u32::from_str_radix(digits, radix).map_err(|_| XmlError::NotWellFormed {
-                pos: self.pos, reason: format!("invalid numeric reference {digits:?}"),
-            })?;
-            let c = char::from_u32(n).ok_or(XmlError::NotWellFormed {
-                pos: self.pos, reason: format!("character reference {n:#x} is not a valid Unicode scalar"),
-            })?;
             Ok(Token::CharRef(c))
         } else {
             let name = self.scan_name()?;
