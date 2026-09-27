@@ -26,6 +26,23 @@ History (Fifth / Fourth):
 | Entity semantics, external entity loading | 1436 / 1501 | 1745 / 1810 |
 | Encoding detection (UTF-16, ASCII, Latin-1) | 1441 / 1501 | 1750 / 1810 |
 
+## Event output (canonical XML)
+
+`output.py` runs `xmlwf --canonical` on every well-formed test that has
+an expected-output file in the catalogue and compares byte for byte, so
+it checks *what the parser reports*, not just accept/reject:
+
+| | 5th ed. | 4th ed. |
+|---|---:|---:|
+| Output matches | **327 / 373 (87.7%)** | **327 / 373 (87.7%)** |
+
+History: 251 (text, line endings, char refs) → 281 (entity content) →
+327 (attribute normalisation, DTD defaults, notations, DTD PIs). All 46
+remaining mismatches depend on declarations in external DTD subsets or
+parameter entities, which are not read yet.
+
+## Notes
+
 The total is the progression metric: it climbs as features land. It is
 not a correctness claim, and passing the well-formedness suite is not the
 same as being a drop-in libexpat replacement (no C ABI yet).
@@ -64,6 +81,8 @@ well-formedness categories); both are still unimplemented.
 - [x] Entity expansion checks: replacement-text well-formedness, No Recursion, attribute rules
 - [x] External parsed entities via an opt-in loader
 - [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
+- [x] Accurate events: text with line endings normalised and references replaced, entity content, normalised attribute values, DTD defaults, notations, DTD PIs and comments
+- [x] Canonical-output checker (`output.py`)
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Validity constraints — target match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — Python `pyexpat` works unmodified

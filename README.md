@@ -8,15 +8,17 @@ built on the older spec, such as libexpat. Aims for the same conformance
 as [libexpat](https://github.com/libexpat/libexpat) without C's
 memory-safety bugs.
 
-> **Status:** early development. Tokeniser, well-formedness checker,
-> DOCTYPE / internal-subset syntax, entity expansion checks with
-> billion-laughs / quadratic-blowup defences, opt-in external entity
-> loading, and UTF-8 / UTF-16 / ASCII / Latin-1 decoding. On the W3C XML
-> well-formedness tests: **1441 / 1501 (96.0%)** of those that apply to
-> the Fifth Edition, **1750 / 1810 (96.7%)** under Fourth Edition rules,
-> accepting every well-formed test. Not yet built: the external DTD
-> subset and parameter-entity expansion, namespaces, DTD validation,
-> reporting expanded entity text as events, and the libexpat C ABI. See
+> **Status:** early development. Well-formedness checking, DOCTYPE /
+> internal-subset handling, entity expansion with billion-laughs /
+> quadratic-blowup defences, opt-in external entity loading, UTF-8 /
+> UTF-16 / ASCII / Latin-1 decoding, and events carrying the document's
+> real content (normalised text and attribute values, entity content,
+> DTD defaults). On the W3C XML suite: **1441 / 1501 (96.0%)**
+> well-formedness tests that apply to the Fifth Edition (**1750 / 1810**
+> under Fourth Edition rules), and **327 / 373 (87.7%)** expected
+> canonical outputs matched. Not yet built: namespaces, incremental
+> (chunked) input, the external DTD subset and parameter-entity
+> expansion, DTD validation, and the libexpat C ABI. See
 > `conformance/STATUS.md`.
 
 ## What this is
@@ -63,7 +65,7 @@ cargo test --release
 │   ├── encoding.rs            # byte → text decoding (UTF-8/16, ASCII, Latin-1)
 │   ├── error.rs               # XmlError + Position
 │   └── bin/
-│       └── xmlwf.rs           # CLI well-formedness checker (--edition, --external)
+│       └── xmlwf.rs           # CLI checker (--edition, --external, --canonical)
 ├── tests/
 │   ├── tokeniser_tests.rs       # 21 tests, one per spec production
 │   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
@@ -71,13 +73,15 @@ cargo test --release
 │   ├── edition_tests.rs         # 5 tests: Fifth vs. Fourth Edition names
 │   ├── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
 │   ├── entity_semantics_tests.rs # 16 tests: replacement text, recursion, loader
-│   └── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
+│   ├── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
+│   └── event_tests.rs           # 17 tests: what callers receive
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
     ├── README.md              # how to run the W3C XML test suite
     ├── runner.sh              # iterates the suite, reports pass/fail
     ├── editions.py            # which tests apply to which edition
+    ├── output.py              # compares canonical output with expected files
     └── STATUS.md              # current conformance numbers
 ```
 
@@ -103,8 +107,11 @@ if a consumer needs a feature in both).
 - [x] Entity expansion checks (replacement text, No Recursion, attribute rules)
 - [x] External parsed entities via an opt-in loader (off by default: no XXE)
 - [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
-- [ ] External DTD subset, parameter-entity expansion, conditional sections
+- [x] Accurate events: normalised text and attribute values, entity content,
+      DTD default attributes, notations — 327 / 373 canonical outputs match
 - [ ] Namespaces (W3C XML Namespaces 1.0)
+- [ ] Incremental (chunked) input
+- [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] DTD validity constraints
 - [ ] Full W3C conformance — match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — drop-in replacement
