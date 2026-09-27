@@ -226,3 +226,18 @@ fn multibyte_char_right_after_short_name() {
     events("<ab>𝄞</ab>").expect("4-byte char after a 2-char name");
     events("<x a='€'/>").expect("3-byte char in attribute after short name");
 }
+
+/// §2.6: PITarget must be followed by whitespace or `?>`.
+#[test]
+fn pi_target_needs_whitespace_before_body() {
+    events("<x><?pi?></x>").expect("empty PI");
+    events("<x><?pi data?></x>").expect("PI with body");
+    assert!(events("<x><?a%b?></x>").is_err(), "'%' is not a NameChar and no S follows target");
+}
+
+/// §3.1 [Production 40]: attributes are separated by required whitespace.
+#[test]
+fn attributes_need_whitespace_between() {
+    events("<x a='1' b='2'/>").expect("space-separated attributes");
+    assert!(events("<x a='1'b='2'/>").is_err(), "missing S between attributes");
+}

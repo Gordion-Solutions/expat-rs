@@ -12,14 +12,19 @@
 #                    oasis (*fail*.xml)
 #
 # Usage:
-#   ./runner.sh <path-to-xmlconf-root> [<xmlwf-binary>]
+#   [EDITION=4|5] [VERBOSE=1] ./runner.sh <path-to-xmlconf-root> [<xmlwf-binary>]
 # e.g.
 #   ./runner.sh /tmp/xmlconf-w3c/xmlconf ../target/release/xmlwf
+#
+# EDITION (default 5) selects the XML 1.0 edition. It is passed to xmlwf
+# (--edition) and tests the catalogue marks as not applying to that
+# edition (the EDITION attribute in xmlconf.xml) are skipped.
 
 set -e
 
 XMLCONF="${1:-/tmp/xmlconf-w3c/xmlconf}"
 XMLWF="${2:-$(dirname "$0")/../target/release/xmlwf}"
+EDITION="${EDITION:-5}"
 
 if [ ! -d "$XMLCONF" ]; then
     echo "ERROR: xmlconf directory not found: $XMLCONF" >&2
@@ -32,6 +37,16 @@ if [ ! -x "$XMLWF" ]; then
     exit 2
 fi
 
+# Tests the catalogue says don't apply to $EDITION.
+SKIP_LIST="$(python3 "$(dirname "$0")/editions.py" "$XMLCONF" "$EDITION")"
+SKIPPED=0
+skip() {
+    case $'\n'"$SKIP_LIST"$'\n' in
+        *$'\n'"$1"$'\n'*) SKIPPED=$((SKIPPED+1)); return 0 ;;
+    esac
+    return 1
+}
+
 # Counters
 WF_PASS=0; WF_FAIL=0
 NOT_WF_PASS=0; NOT_WF_FAIL=0
@@ -40,7 +55,8 @@ declare -a WF_FAILURES NOT_WF_FAILURES
 # Run xmlwf, expecting it to succeed.
 run_wf() {
     local file="$1"
-    if "$XMLWF" "$file" > /dev/null 2>&1; then
+    skip "$file" && return
+    if "$XMLWF" --edition "$EDITION" "$file" > /dev/null 2>&1; then
         WF_PASS=$((WF_PASS+1))
     else
         WF_FAIL=$((WF_FAIL+1))
@@ -51,7 +67,8 @@ run_wf() {
 # Run xmlwf, expecting it to fail.
 run_not_wf() {
     local file="$1"
-    if "$XMLWF" "$file" > /dev/null 2>&1; then
+    skip "$file" && return
+    if "$XMLWF" --edition "$EDITION" "$file" > /dev/null 2>&1; then
         NOT_WF_FAIL=$((NOT_WF_FAIL+1))
         NOT_WF_FAILURES+=("$file")
     else
@@ -146,7 +163,8 @@ TOTAL=$((WF_TOTAL + NOT_WF_TOTAL))
 PASS_TOTAL=$((WF_PASS + NOT_WF_PASS))
 
 cat <<EOF
-=== W3C XML Conformance — expat-rs ===
+=== W3C XML Conformance — expat-rs (XML 1.0 edition $EDITION) ===
+Skipped (not applicable to edition $EDITION): $SKIPPED
 Well-formed cases:    $WF_PASS / $WF_TOTAL accepted
 Not-well-formed:      $NOT_WF_PASS / $NOT_WF_TOTAL correctly rejected
 TOTAL:                $PASS_TOTAL / $TOTAL  ($(awk "BEGIN{printf \"%.1f\", 100*$PASS_TOTAL/$TOTAL}")%)

@@ -5,6 +5,7 @@
 //! clean-room declaration and audit trail.
 
 mod chars;
+mod edition4;
 pub mod error;
 pub mod token;
 pub mod lexer;
@@ -12,6 +13,7 @@ pub mod event;
 pub mod parser;
 pub mod entities;
 
+pub use chars::Edition;
 pub use error::{Position, XmlError, Result};
 pub use event::Event;
 pub use lexer::Lexer;

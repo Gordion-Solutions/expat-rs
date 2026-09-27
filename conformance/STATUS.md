@@ -4,22 +4,28 @@ Numbers updated as the parser progresses.
 
 ## Latest run
 
-| Category | Pass | Total | Rate |
-|---|---:|---:|---:|
-| Well-formed inputs accepted | **533** | 567 | **94.0%** |
-| Not-well-formed inputs rejected | **394** | 1243 | **31.7%** |
-| **In-scope tests (features we've shipped)** | **~927** | **~1130** | **~82%** |
-| Full suite (limited by unimplemented features) | 927 | 1810 | 51.2% |
-| _libexpat reference (full feature parity)_ | _1801_ | _1809_ | _99.6%_ |
+Tests apply per XML 1.0 edition (see `README.md`). Fifth Edition is the
+default; Fourth Edition runs the whole suite.
 
-The **in-scope** number is the one to read. Of the 1243 not-well-formed
-tests in the suite, roughly 680 exercise features we haven't built yet
-(DTD validation, namespace constraints, encoding detection,
-external-DTD entity loading). Excluding those gives a denominator of
-~1130 — the tests that should pass given what we've shipped.
+| Category | 5th ed. | 4th ed. |
+|---|---:|---:|
+| Tests skipped (not applicable to edition) | 309 | 0 |
+| Well-formed inputs accepted | **536** / 567 (94.5%) | **536** / 567 (94.5%) |
+| Not-well-formed inputs rejected | **436** / 934 (46.7%) | **443** / 1243 (35.6%) |
+| **Total** | **972 / 1501 (64.8%)** | **979 / 1810 (54.1%)** |
+| _libexpat reference_ | | _1801 / 1809 (99.6%)_ |
 
-The full-suite 51.2% is the progression metric — it climbs as we
-implement more features. We track it for that reason, not as a
+Previous run (v0.1, no edition filtering): 927 / 1810 (51.2%).
+
+The Fourth Edition name-rule tests (IBM P85–P89, ~310) all place the bad
+name in a processing instruction inside the DTD internal subset, which
+the parser does not yet tokenise — so `Edition::Fourth` is implemented and
+unit-tested but those tests only start passing once DTD declarations land.
+
+Most remaining not-well-formed failures exercise features not built yet
+(DTD declarations and validity, namespace constraints, encoding
+detection, external-DTD loading) — see the breakdown below. The total is
+the progression metric: it climbs as features land. It is not a
 correctness claim.
 
 > The 557 → 533 dip happened because we now reject undeclared entities.
@@ -27,8 +33,8 @@ correctness claim.
 > load — they fail accordingly. We could add a permissive mode to
 > accept those if needed.
 
-Run with: `./runner.sh /tmp/xmlconf-w3c/xmlconf` (after downloading
-`xmlts20130923.zip` from W3C).
+Run with: `./runner.sh <path>/xmlconf` (after downloading and unzipping
+`xmlts20130923.zip` from W3C); `EDITION=4` for the Fourth Edition.
 
 ## What's in the "out of scope" bucket
 
@@ -52,6 +58,9 @@ categorises each test (planned).
 - [x] Well-formedness checker
 - [x] Full Unicode `NameStartChar` / `NameChar` per §2.3
 - [x] Defensive entity expansion (billion-laughs / quadratic-blowup mitigation)
+- [x] §2.2 Char enforcement and validated character references
+- [x] Edition selection: Fifth (default) or Fourth Edition name rules
+- [x] Edition-aware conformance runner
 - [ ] Encoding detection (UTF-16 BOM, declared encodings)
 - [ ] Namespaces (W3C XML Namespaces 1.0)
 - [ ] DTD declarations
