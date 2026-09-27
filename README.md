@@ -9,12 +9,14 @@ as [libexpat](https://github.com/libexpat/libexpat) without C's
 memory-safety bugs.
 
 > **Status:** early development. Tokeniser, well-formedness checker,
-> DOCTYPE / internal-subset syntax, §2.2 character validation, and entity
-> expansion with billion-laughs / quadratic-blowup defences. On the W3C
-> XML well-formedness tests: **1381 / 1501 (92.0%)** of those that apply
-> to the Fifth Edition, **1688 / 1810 (93.3%)** under Fourth Edition
-> rules. Not yet built: external DTDs and entities, namespaces, encoding
-> detection, DTD validation, and the libexpat C ABI. See
+> DOCTYPE / internal-subset syntax, entity expansion checks with
+> billion-laughs / quadratic-blowup defences, opt-in external entity
+> loading, and UTF-8 / UTF-16 / ASCII / Latin-1 decoding. On the W3C XML
+> well-formedness tests: **1441 / 1501 (96.0%)** of those that apply to
+> the Fifth Edition, **1750 / 1810 (96.7%)** under Fourth Edition rules,
+> accepting every well-formed test. Not yet built: the external DTD
+> subset and parameter-entity expansion, namespaces, DTD validation,
+> reporting expanded entity text as events, and the libexpat C ABI. See
 > `conformance/STATUS.md`.
 
 ## What this is
@@ -56,16 +58,20 @@ cargo test --release
 │   ├── edition4.rs            # 4th ed. Appendix B tables (generated)
 │   ├── event.rs               # high-level Event enum (parser output)
 │   ├── parser.rs              # well-formedness checker
-│   ├── entities.rs            # DTD entity decls + bounded expansion
+│   ├── entities.rs            # entity declarations and table
+│   ├── expand.rs              # entity expansion checks, bounded
+│   ├── encoding.rs            # byte → text decoding (UTF-8/16, ASCII, Latin-1)
 │   ├── error.rs               # XmlError + Position
 │   └── bin/
-│       └── xmlwf.rs           # CLI well-formedness checker (--edition 4|5)
+│       └── xmlwf.rs           # CLI well-formedness checker (--edition, --external)
 ├── tests/
 │   ├── tokeniser_tests.rs       # 21 tests, one per spec production
 │   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
 │   ├── entity_security_tests.rs # 16 tests: billion-laughs, quadratic-blowup, …
 │   ├── edition_tests.rs         # 5 tests: Fifth vs. Fourth Edition names
-│   └── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
+│   ├── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
+│   ├── entity_semantics_tests.rs # 16 tests: replacement text, recursion, loader
+│   └── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
@@ -90,12 +96,14 @@ if a consumer needs a feature in both).
 - [x] §2.2 Char enforcement and validated character references
 - [x] Entity expansion with defensive limits — 9 security tests including
       billion-laughs and quadratic-blowup
-- [x] Edition-aware W3C XML conformance runner — 1381 / 1501 (Fifth),
-      1688 / 1810 (Fourth)
+- [x] Edition-aware W3C XML conformance runner — 1441 / 1501 (Fifth),
+      1750 / 1810 (Fourth)
 - [x] DOCTYPE and internal-subset syntax (all markup declarations)
 - [x] Strict XML declaration; references checked in attribute values
-- [ ] External DTD subset and external entities
-- [ ] Encoding detection (UTF-16 BOM, declared encodings)
+- [x] Entity expansion checks (replacement text, No Recursion, attribute rules)
+- [x] External parsed entities via an opt-in loader (off by default: no XXE)
+- [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
+- [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Namespaces (W3C XML Namespaces 1.0)
 - [ ] DTD validity constraints
 - [ ] Full W3C conformance — match libexpat's 1801/1809

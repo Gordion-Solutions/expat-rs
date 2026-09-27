@@ -10,9 +10,9 @@ default; Fourth Edition runs the whole suite.
 | Category | 5th ed. | 4th ed. |
 |---|---:|---:|
 | Tests skipped (not applicable to edition) | 309 | 0 |
-| Well-formed inputs accepted | **538** / 567 (94.9%) | **538** / 567 (94.9%) |
-| Not-well-formed inputs rejected | **843** / 934 (90.3%) | **1150** / 1243 (92.5%) |
-| **Total** | **1381 / 1501 (92.0%)** | **1688 / 1810 (93.3%)** |
+| Well-formed inputs accepted | **567** / 567 (100%) | **567** / 567 (100%) |
+| Not-well-formed inputs rejected | **874** / 934 (93.6%) | **1183** / 1243 (95.2%) |
+| **Total** | **1441 / 1501 (96.0%)** | **1750 / 1810 (96.7%)** |
 | _libexpat reference_ | | _1801 / 1809 (99.6%)_ |
 
 History (Fifth / Fourth):
@@ -23,24 +23,28 @@ History (Fifth / Fourth):
 | §2.2 Char, char refs, edition option | 972 / 1501 | 979 / 1810 |
 | DOCTYPE + internal subset tokeniser | 1329 / 1501 | 1636 / 1810 |
 | Strict XML declaration, AttValue references | 1381 / 1501 | 1688 / 1810 |
+| Entity semantics, external entity loading | 1436 / 1501 | 1745 / 1810 |
+| Encoding detection (UTF-16, ASCII, Latin-1) | 1441 / 1501 | 1750 / 1810 |
 
 The total is the progression metric: it climbs as features land. It is
 not a correctness claim, and passing the well-formedness suite is not the
 same as being a drop-in libexpat replacement (no C ABI yet).
 
 Run with: `./runner.sh <path>/xmlconf` (after downloading and unzipping
-`xmlts20130923.zip` from W3C); `EDITION=4` for the Fourth Edition.
+`xmlts20130923.zip` from W3C); `EDITION=4` for the Fourth Edition. The
+runner calls `xmlwf --external`, so external parsed entities beside each
+test are read; the library itself never reads external entities unless
+given a loader (`Parser::with_external_loader`).
 
 ## What's still failing (Fifth Edition)
 
-From a manual review of the failure list (`VERBOSE=1`):
+All 60 remaining failures are not-well-formed inputs we accept. From a
+manual review of the failure list (`VERBOSE=1`):
 
 | Category | Approx. tests | Feature that would cover it |
 |---|---:|---|
-| External DTD subset and external entities: conditional sections, text declarations, declarations in `.dtd`/`.ent` files | ~55 | Loading and parsing external entities |
-| Entity semantics: undeclared or recursive entities, `<` or bad references arriving via replacement text, references to external/unparsed entities in attributes | ~30 | Real entity expansion with replacement-text re-parsing |
-| Valid documents rejected: external entities we don't load, UTF-16 input | ~29 | External entities; encoding detection |
-| Other edge cases | ~6 | Iterative |
+| External DTD subset: conditional sections (`<![INCLUDE[`/`<![IGNORE[`), text declarations and declarations in `.dtd` files, parameter entities inside declarations | ~55 | Reading the external subset and external parameter entities; PE expansion |
+| Other edge cases | ~5 | Iterative |
 
 Namespaces and DTD validity are not measured by this runner (it runs the
 well-formedness categories); both are still unimplemented.
@@ -56,10 +60,11 @@ well-formedness categories); both are still unimplemented.
 - [x] Edition-aware conformance runner
 - [x] DOCTYPE and internal-subset syntax (all markup declarations)
 - [x] Strict XML declaration; references checked in attribute values
-- [ ] Encoding detection (UTF-16 BOM, declared encodings)
 - [ ] Namespaces (W3C XML Namespaces 1.0)
-- [ ] External DTD subset and external entities (incl. conditional sections)
-- [ ] Entity expansion with replacement-text well-formedness
+- [x] Entity expansion checks: replacement-text well-formedness, No Recursion, attribute rules
+- [x] External parsed entities via an opt-in loader
+- [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
+- [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Validity constraints — target match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — Python `pyexpat` works unmodified
 - [ ] Per-test categorisation in the runner (parse `xmlconf.xml` to make the in-scope number exact rather than approximate)
