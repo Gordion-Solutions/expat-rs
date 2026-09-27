@@ -12,6 +12,7 @@
 use super::Lexer;
 use crate::entities::{expand_char_refs, Dtd, DtdDecl, EntityDef};
 use crate::error::{Result, XmlError};
+use crate::event::normalize_newlines;
 use crate::token::Token;
 
 impl<'a> Lexer<'a> {
@@ -313,7 +314,9 @@ impl<'a> Lexer<'a> {
         let name = self.scan_name()?;
         self.require_whitespace("after entity name")?;
         let def = if matches!(self.current(), Some(b'"' | b'\'')) {
-            EntityDef::Internal(expand_char_refs(self.scan_entity_value()?))
+            // §2.11 line-end normalisation happens before character
+            // references are expanded, so a CR from &#13; survives.
+            EntityDef::Internal(expand_char_refs(&normalize_newlines(self.scan_entity_value()?)))
         } else {
             let (public_id, system_id) = self.scan_external_id(false)?;
             let mut unparsed = false;
