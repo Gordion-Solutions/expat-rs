@@ -7,6 +7,8 @@
 //! Implements the lexical rules of W3C XML 1.0 (Fifth Edition) §2 and §3.
 //! Each non-trivial scan function carries a spec citation.
 
+mod dtd;
+
 use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
@@ -448,34 +450,6 @@ impl<'a> Lexer<'a> {
                 pos: self.pos,
                 reason: format!("expected keyword {:?}", std::str::from_utf8(kw).unwrap_or("?")),
             })
-        }
-    }
-
-    /// Scan a DOCTYPE declaration per §2.8 [Production 28]. Week 1: capture
-    /// the name and the body bytes between `<!DOCTYPE` and the matching `>`,
-    /// without parsing internal subset / external IDs.
-    fn scan_doctype(&mut self) -> Result<Token<'a>> {
-        debug_assert!(self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE"));
-        self.pos.byte_offset += 9;
-        self.pos.column += 9;
-        self.skip_whitespace();
-        let name = self.scan_name()?;
-        let body_start = self.pos.byte_offset;
-        // Track bracket depth for internal subset
-        let mut depth = 0i32;
-        loop {
-            match self.current() {
-                None => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "DOCTYPE" }),
-                Some(b'[') => { depth += 1; self.bump(); }
-                Some(b']') => { depth -= 1; self.bump(); }
-                Some(b'>') if depth == 0 => {
-                    let body = std::str::from_utf8(&self.src[body_start..self.pos.byte_offset])
-                        .unwrap_or("").trim();
-                    self.bump();
-                    return Ok(Token::Doctype { name, body });
-                }
-                Some(_) => self.bump(),
-            }
         }
     }
 
