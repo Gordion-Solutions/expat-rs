@@ -76,10 +76,12 @@ impl<'a> Lexer<'a> {
                 if target.eq_ignore_ascii_case("xml") {
                     return Err(self.not_wf("processing instruction target 'xml' is reserved"));
                 }
-                self.scan_pi_body()?;
+                let body = self.scan_pi_body()?;
+                self.dtd.decls.push(DtdDecl::Pi { target: target.to_string(), body: body.to_string() });
             } else if rest.starts_with(b"<!--") {
                 self.advance_ascii(4);
-                self.scan_comment_body()?;
+                let body = self.scan_comment_body()?;
+                self.dtd.decls.push(DtdDecl::Comment(body.to_string()));
             } else if rest.starts_with(b"<!ELEMENT") {
                 self.advance_ascii(b"<!ELEMENT".len());
                 self.scan_element_decl()?;
@@ -217,7 +219,7 @@ impl<'a> Lexer<'a> {
     ///   AttDef      ::= S Name S AttType S DefaultDecl
     fn scan_attlist_decl(&mut self) -> Result<()> {
         self.require_whitespace("after '<!ATTLIST'")?;
-        self.scan_name()?;
+        let element = self.scan_name()?;
         loop {
             let had_space = self.skip_whitespace();
             if self.current() == Some(b'>') {
@@ -228,11 +230,15 @@ impl<'a> Lexer<'a> {
                 return Err(self.eof_or_not_wf("attribute-list declaration",
                                               "whitespace required before attribute definition"));
             }
-            self.scan_name()?;
+            let pos = self.pos;
+            let name = self.scan_name()?;
             self.require_whitespace("after attribute name")?;
-            self.scan_att_type()?;
+            let cdata = self.scan_att_type()?;
             self.require_whitespace("after attribute type")?;
-            self.scan_default_decl()?;
+            let default = self.scan_default_decl()?.map(str::to_string);
+            self.dtd.decls.push(DtdDecl::AttDef {
+                element: element.to_string(), name: name.to_string(), cdata, default, pos,
+            });
         }
     }
 
@@ -244,12 +250,17 @@ impl<'a> Lexer<'a> {
     ///                    | 'NMTOKEN' | 'NMTOKENS'
     ///   NotationType   ::= 'NOTATION' S '(' S? Name (S? '|' S? Name)* S? ')'
     ///   Enumeration    ::= '(' S? Nmtoken (S? '|' S? Nmtoken)* S? ')'
-    fn scan_att_type(&mut self) -> Result<()> {
-        const TYPES: [&[u8]; 8] = [
-            b"CDATA", b"ID", b"IDREF", b"IDREFS", b"ENTITY", b"ENTITIES", b"NMTOKEN", b"NMTOKENS",
+    ///
+    /// Returns whether the type is CDATA.
+    fn scan_att_type(&mut self) -> Result<bool> {
+        const TOKENIZED: [&[u8]; 7] = [
+            b"ID", b"IDREF", b"IDREFS", b"ENTITY", b"ENTITIES", b"NMTOKEN", b"NMTOKENS",
         ];
-        if TYPES.iter().any(|t| self.try_keyword(t)) {
-            return Ok(());
+        if self.try_keyword(b"CDATA") {
+            return Ok(true);
+        }
+        if TOKENIZED.iter().any(|t| self.try_keyword(t)) {
+            return Ok(false);
         }
         let notation = self.try_keyword(b"NOTATION");
         if notation {
@@ -262,7 +273,7 @@ impl<'a> Lexer<'a> {
             self.skip_whitespace();
             match self.current() {
                 Some(b'|') => self.bump(),
-                Some(b')') => { self.bump(); return Ok(()); }
+                Some(b')') => { self.bump(); return Ok(false); }
                 _ => return Err(self.eof_or_not_wf("attribute-list declaration",
                                                    "expected '|' or ')' in enumerated type")),
             }
@@ -284,17 +295,17 @@ impl<'a> Lexer<'a> {
     /// §3.3.2 [Production 60]:
     ///
     ///   DefaultDecl ::= '#REQUIRED' | '#IMPLIED' | (('#FIXED' S)? AttValue)
-    fn scan_default_decl(&mut self) -> Result<()> {
+    ///
+    /// Returns the default value as written, or `None` for #REQUIRED and
+    /// #IMPLIED.
+    fn scan_default_decl(&mut self) -> Result<Option<&'a str>> {
         if self.try_literal(b"#REQUIRED") || self.try_literal(b"#IMPLIED") {
-            return Ok(());
+            return Ok(None);
         }
         if self.try_literal(b"#FIXED") {
             self.require_whitespace("after #FIXED")?;
         }
-        let pos = self.pos;
-        let value = self.scan_attr_value()?;
-        self.dtd.decls.push(DtdDecl::AttDefault { value: value.to_string(), pos });
-        Ok(())
+        self.scan_attr_value().map(Some)
     }
 
     /// §4.2 [Productions 70–74, 76]:
@@ -384,11 +395,17 @@ impl<'a> Lexer<'a> {
     ///   NotationDecl ::= '<!NOTATION' S Name S (ExternalID | PublicID) S? '>'
     fn scan_notation_decl(&mut self) -> Result<()> {
         self.require_whitespace("after '<!NOTATION'")?;
-        self.scan_name()?;
+        let name = self.scan_name()?;
         self.require_whitespace("after notation name")?;
-        self.scan_external_id(true)?;
+        let (public_id, system_id) = self.scan_external_id(true)?;
         self.skip_whitespace();
-        self.expect_byte(b'>', "expected '>' to close notation declaration")
+        self.expect_byte(b'>', "expected '>' to close notation declaration")?;
+        self.dtd.decls.push(DtdDecl::Notation {
+            name: name.to_string(),
+            public_id: public_id.map(str::to_string),
+            system_id: system_id.map(str::to_string),
+        });
+        Ok(())
     }
 
     /// §4.2.2 [Productions 75, 83]:

@@ -61,8 +61,24 @@ pub(crate) enum EntityDef {
 #[derive(Clone, Debug)]
 pub(crate) enum DtdDecl {
     Entity { name: String, parameter: bool, def: EntityDef },
-    /// Default value of an attribute (§3.3.2), as written between the quotes.
-    AttDefault { value: String, pos: Position },
+    /// One attribute definition from an attribute-list declaration (§3.3).
+    AttDef {
+        element: String,
+        name: String,
+        /// Declared type is CDATA. Other types get extra whitespace
+        /// normalisation (§3.3.3).
+        cdata: bool,
+        /// Default value as written between the quotes (plain or #FIXED);
+        /// `None` for #REQUIRED and #IMPLIED.
+        default: Option<String>,
+        pos: Position,
+    },
+    /// A processing instruction in the internal subset (§2.6).
+    Pi { target: String, body: String },
+    /// A comment in the internal subset (§2.5).
+    Comment(String),
+    /// A notation declaration (§4.7).
+    Notation { name: String, public_id: Option<String>, system_id: Option<String> },
     /// A parameter-entity reference between declarations (§2.8 DeclSep).
     /// Parameter entities are not expanded yet, so per §5.1 declarations
     /// after one are not processed.
@@ -103,6 +119,38 @@ impl EntityTable {
 
     pub(crate) fn get(&self, name: &str) -> Option<&EntityDef> {
         self.entities.get(name)
+    }
+}
+
+/// A declared attribute, from `<!ATTLIST>` (§3.3).
+#[derive(Clone, Debug)]
+pub(crate) struct AttDecl {
+    pub name: String,
+    /// Declared type is CDATA (no extra whitespace normalisation).
+    pub cdata: bool,
+    /// Normalised default value (plain or #FIXED), or `None` for
+    /// #REQUIRED / #IMPLIED.
+    pub default: Option<String>,
+}
+
+/// Attribute declarations by element name.
+#[derive(Default, Debug)]
+pub(crate) struct AttlistTable {
+    by_element: HashMap<String, Vec<AttDecl>>,
+}
+
+impl AttlistTable {
+    /// Per §3.3, the first definition of an attribute for an element is
+    /// binding; later ones are ignored.
+    pub fn declare(&mut self, element: String, decl: AttDecl) {
+        let decls = self.by_element.entry(element).or_default();
+        if !decls.iter().any(|d| d.name == decl.name) {
+            decls.push(decl);
+        }
+    }
+
+    pub fn get(&self, element: &str) -> &[AttDecl] {
+        self.by_element.get(element).map_or(&[], Vec::as_slice)
     }
 }
 

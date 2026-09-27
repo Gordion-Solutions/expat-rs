@@ -22,11 +22,11 @@
 use std::borrow::Cow;
 
 use crate::chars::{decode_char_ref, is_name_char, is_name_start_char, Edition};
-use crate::entities::{builtin_entity, EntityDef, EntityTable, ExpansionLimits};
+use crate::entities::{builtin_entity, AttlistTable, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{Position, Result, XmlError};
 use crate::lexer::Lexer;
 use crate::event::{normalize_newlines, Attribute, Event};
-use crate::token::Token;
+use crate::token::{Attr, Token};
 
 fn owned(s: &str) -> Cow<'static, str> {
     Cow::Owned(s.to_string())
@@ -40,6 +40,7 @@ pub type ExternalLoader<'l> =
 
 pub(crate) struct Expander<'e, 'l> {
     pub table: &'e EntityTable,
+    pub attlists: &'e AttlistTable,
     pub limits: ExpansionLimits,
     pub edition: Edition,
     /// Whether §4.1 WFC Entity Declared applies to this document.
@@ -58,6 +59,7 @@ pub(crate) struct Expander<'e, 'l> {
 impl<'e, 'l> Expander<'e, 'l> {
     pub fn new(
         table: &'e EntityTable,
+        attlists: &'e AttlistTable,
         limits: ExpansionLimits,
         edition: Edition,
         entity_declared_wfc: bool,
@@ -65,7 +67,7 @@ impl<'e, 'l> Expander<'e, 'l> {
         pos: Position,
     ) -> Self {
         Self {
-            table, limits, edition, entity_declared_wfc, loader, pos,
+            table, attlists, limits, edition, entity_declared_wfc, loader, pos,
             expanded: 0, stack: Vec::new(), events: Vec::new(),
         }
     }
@@ -74,17 +76,85 @@ impl<'e, 'l> Expander<'e, 'l> {
         XmlError::NotWellFormed { pos: self.pos, reason }
     }
 
-    /// Check every entity reference in an attribute value as written
-    /// (references already syntax-checked by the lexer).
-    pub fn check_attr_value(&mut self, value: &str) -> Result<()> {
-        for name in entity_ref_names(value, self.edition) {
-            self.check_attr_entity(name)?;
+    /// Event attributes for a start tag of `element`: values normalised
+    /// (§3.3.3) with their entity references checked, then any declared
+    /// defaults the tag doesn't specify.
+    pub fn attributes<'x>(&mut self, element: &str, attrs: &[Attr<'x>]) -> Result<Vec<Attribute<'x>>> {
+        crate::parser::check_unique_attrs(attrs, self.pos)?;
+        let decls = self.attlists.get(element);
+        let mut out = Vec::with_capacity(attrs.len());
+        for a in attrs {
+            let cdata = decls.iter().find(|d| d.name == a.name).is_none_or(|d| d.cdata);
+            let value = self.attr_value(a.value, cdata)?;
+            out.push(Attribute { name: Cow::Borrowed(a.name), value, specified: true });
         }
+        for d in decls {
+            if let Some(default) = &d.default {
+                if !attrs.iter().any(|a| a.name == d.name) {
+                    out.push(Attribute {
+                        name: Cow::Owned(d.name.clone()),
+                        value: Cow::Owned(default.clone()),
+                        specified: false,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Normalise an attribute value as written (§3.3.3), checking the
+    /// entities it references. `cdata` is false for declared types other
+    /// than CDATA, which also trim and collapse spaces.
+    pub fn attr_value<'x>(&mut self, raw: &'x str, cdata: bool) -> Result<Cow<'x, str>> {
+        let unchanged = !raw.contains(['&', '\t', '\n', '\r'])
+            && (cdata || (!raw.starts_with(' ') && !raw.ends_with(' ') && !raw.contains("  ")));
+        if unchanged {
+            return Ok(Cow::Borrowed(raw));
+        }
+        let mut out = String::with_capacity(raw.len());
+        self.normalize_into(&normalize_newlines(raw), &mut out, None)?;
+        if !cdata {
+            out = out.split(' ').filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+        }
+        Ok(Cow::Owned(out))
+    }
+
+    /// §3.3.3 step 2 over `text`: character references append their
+    /// character, entity references are processed recursively, and each
+    /// whitespace character becomes a space. `entity` names the entity
+    /// whose replacement text this is, for error messages.
+    fn normalize_into(&mut self, text: &str, out: &mut String, entity: Option<&str>) -> Result<()> {
+        let push_text = |out: &mut String, s: &str| {
+            out.extend(s.chars().map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c }));
+        };
+        let mut rest = text;
+        while let Some(i) = rest.find('&') {
+            push_text(out, &rest[..i]);
+            let after = &rest[i + 1..];
+            let in_entity = |reason: String| match entity {
+                Some(name) => format!("in entity {name:?}: {reason}"),
+                None => reason,
+            };
+            let Some(end) = after.find(';') else {
+                return Err(self.error(in_entity("'&' does not start a reference".into())));
+            };
+            let body = &after[..end];
+            if let Some(num) = body.strip_prefix('#') {
+                out.push(decode_char_ref(num).map_err(|r| self.error(in_entity(r)))?);
+            } else if is_name(body, self.edition) {
+                self.attr_entity_into(body, out)?;
+            } else {
+                return Err(self.error(in_entity(format!("'&{body};' is not a well-formed reference"))));
+            }
+            rest = &after[end + 1..];
+        }
+        push_text(out, rest);
         Ok(())
     }
 
-    fn check_attr_entity(&mut self, name: &str) -> Result<()> {
-        if builtin_entity(name).is_some() {
+    fn attr_entity_into(&mut self, name: &str, out: &mut String) -> Result<()> {
+        if let Some(text) = builtin_entity(name) {
+            out.push_str(text);
             return Ok(());
         }
         let text = match self.table.get(name) {
@@ -102,15 +172,8 @@ impl<'e, 'l> Expander<'e, 'l> {
         if text.contains('<') {
             return Err(self.error(format!("entity {name:?} puts '<' in an attribute value")));
         }
-        // Replacement text is parsed again (§4.4.5): each '&' must start a
-        // well-formed reference.
-        for r in references(text, self.edition) {
-            match r {
-                Ok(Reference::Char) => {}
-                Ok(Reference::Entity(inner)) => self.check_attr_entity(inner)?,
-                Err(reason) => return Err(self.error(format!("in entity {name:?}: {reason}"))),
-            }
-        }
+        // Replacement text is parsed again (§4.4.5).
+        self.normalize_into(text, out, Some(name))?;
         self.leave();
         Ok(())
     }
@@ -181,12 +244,12 @@ impl<'e, 'l> Expander<'e, 'l> {
         while let Some(tok) = lexer.next_token().map_err(in_entity)? {
             match tok {
                 Token::StartTag { name: tag, attributes } => {
-                    let attributes = self.tag_attributes(&attributes)?;
+                    let attributes = self.tag_attributes(tag, &attributes)?;
                     self.events.push(Event::StartElement { name: owned(tag), attributes });
                     open.push(tag);
                 }
                 Token::EmptyTag { name: tag, attributes } => {
-                    let attributes = self.tag_attributes(&attributes)?;
+                    let attributes = self.tag_attributes(tag, &attributes)?;
                     self.events.push(Event::StartElement { name: owned(tag), attributes });
                     self.events.push(Event::EndElement(owned(tag)));
                 }
@@ -215,14 +278,12 @@ impl<'e, 'l> Expander<'e, 'l> {
         Ok(())
     }
 
-    /// Check the attributes of a start tag inside an entity and build their
-    /// event form.
-    fn tag_attributes(&mut self, attributes: &[crate::token::Attr<'_>]) -> Result<Vec<Attribute<'static>>> {
-        crate::parser::check_unique_attrs(attributes, self.pos)?;
-        attributes.iter().map(|a| {
-            self.check_attr_value(a.value)?;
-            Ok(Attribute { name: owned(a.name), value: owned(a.value), specified: true })
-        }).collect()
+    /// Event attributes for a start tag inside an entity, owned.
+    fn tag_attributes(&mut self, element: &str, attributes: &[Attr<'_>]) -> Result<Vec<Attribute<'static>>> {
+        Ok(self.attributes(element, attributes)?
+            .into_iter()
+            .map(|a| Attribute { name: owned(&a.name), value: owned(&a.value), specified: a.specified })
+            .collect())
     }
 
     fn undeclared(&self, name: &str) -> Result<()> {
@@ -257,42 +318,6 @@ impl<'e, 'l> Expander<'e, 'l> {
     fn leave(&mut self) {
         self.stack.pop();
     }
-}
-
-enum Reference<'a> {
-    Char,
-    Entity(&'a str),
-}
-
-/// Every reference in `text`, checked against §4.1 [Productions 66–68].
-fn references(text: &str, edition: Edition) -> impl Iterator<Item = std::result::Result<Reference<'_>, String>> {
-    let mut rest = text;
-    std::iter::from_fn(move || {
-        let i = rest.find('&')?;
-        let after = &rest[i + 1..];
-        let Some(end) = after.find(';') else {
-            rest = "";
-            return Some(Err("'&' does not start a reference".into()));
-        };
-        let body = &after[..end];
-        rest = &after[end + 1..];
-        Some(if let Some(num) = body.strip_prefix('#') {
-            decode_char_ref(num).map(|_| Reference::Char)
-        } else if is_name(body, edition) {
-            Ok(Reference::Entity(body))
-        } else {
-            Err(format!("'&{body};' is not a well-formed reference"))
-        })
-    })
-}
-
-/// Names of the entity references in text whose references are already
-/// known to be well-formed.
-fn entity_ref_names(text: &str, edition: Edition) -> impl Iterator<Item = &str> {
-    references(text, edition).filter_map(|r| match r {
-        Ok(Reference::Entity(name)) => Some(name),
-        _ => None,
-    })
 }
 
 /// §2.3 [Production 5]: Name, under `edition`. Replacement text can contain
