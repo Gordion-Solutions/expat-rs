@@ -9,11 +9,12 @@ as [libexpat](https://github.com/libexpat/libexpat) without C's
 memory-safety bugs.
 
 > **Status:** early development. Tokeniser, well-formedness checker,
-> §2.2 character validation, and entity expansion with billion-laughs /
-> quadratic-blowup defences. On the W3C XML conformance suite:
-> **972 / 1501 (64.8%)** of the tests that apply to the Fifth Edition,
-> **979 / 1810 (54.1%)** under Fourth Edition rules. The gap is
-> unimplemented features (DTDs, namespaces, encoding detection). See
+> DOCTYPE / internal-subset syntax, §2.2 character validation, and entity
+> expansion with billion-laughs / quadratic-blowup defences. On the W3C
+> XML well-formedness tests: **1381 / 1501 (92.0%)** of those that apply
+> to the Fifth Edition, **1688 / 1810 (93.3%)** under Fourth Edition
+> rules. Not yet built: external DTDs and entities, namespaces, encoding
+> detection, DTD validation, and the libexpat C ABI. See
 > `conformance/STATUS.md`.
 
 ## What this is
@@ -50,6 +51,7 @@ cargo test --release
 │   ├── lib.rs                 # public API
 │   ├── token.rs               # Token enum (every W3C production cited)
 │   ├── lexer.rs               # tokeniser
+│   ├── lexer/dtd.rs           # DOCTYPE + internal-subset syntax
 │   ├── chars.rs               # §2.2 Char, Name rules per Edition, char refs
 │   ├── edition4.rs            # 4th ed. Appendix B tables (generated)
 │   ├── event.rs               # high-level Event enum (parser output)
@@ -60,9 +62,10 @@ cargo test --release
 │       └── xmlwf.rs           # CLI well-formedness checker (--edition 4|5)
 ├── tests/
 │   ├── tokeniser_tests.rs       # 21 tests, one per spec production
-│   ├── well_formedness_tests.rs # 29 tests: §2.1 constraints, §2.2 Char, …
+│   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
 │   ├── entity_security_tests.rs # 16 tests: billion-laughs, quadratic-blowup, …
-│   └── edition_tests.rs         # 5 tests: Fifth vs. Fourth Edition names
+│   ├── edition_tests.rs         # 5 tests: Fifth vs. Fourth Edition names
+│   └── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
@@ -87,10 +90,13 @@ if a consumer needs a feature in both).
 - [x] §2.2 Char enforcement and validated character references
 - [x] Entity expansion with defensive limits — 9 security tests including
       billion-laughs and quadratic-blowup
-- [x] Edition-aware W3C XML conformance runner — 972 / 1501 (Fifth),
-      979 / 1810 (Fourth); gap is unimplemented features
-- [ ] Encoding detection (UTF-16 BOM, declared encodings) — target +5-7%
-- [ ] Namespaces (W3C XML Namespaces 1.0) — target +15%
-- [ ] DTDs and validity constraints — target +25-30%
+- [x] Edition-aware W3C XML conformance runner — 1381 / 1501 (Fifth),
+      1688 / 1810 (Fourth)
+- [x] DOCTYPE and internal-subset syntax (all markup declarations)
+- [x] Strict XML declaration; references checked in attribute values
+- [ ] External DTD subset and external entities
+- [ ] Encoding detection (UTF-16 BOM, declared encodings)
+- [ ] Namespaces (W3C XML Namespaces 1.0)
+- [ ] DTD validity constraints
 - [ ] Full W3C conformance — match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — drop-in replacement
