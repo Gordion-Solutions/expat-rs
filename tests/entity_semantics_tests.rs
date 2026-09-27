@@ -126,7 +126,7 @@ fn with_loader(src: &str, text: &'static str) -> (Result<(), XmlError>, usize) {
     let mut p = Parser::new(src).with_external_loader(move |system_id, public_id| {
         assert_eq!((system_id, public_id), ("e.xml", None));
         seen.set(seen.get() + 1);
-        Some(text.to_string())
+        Ok(Some(text.to_string()))
     });
     let r = (|| { while p.next_event()?.is_some() {} Ok(()) })();
     (r, calls.get())
@@ -151,8 +151,15 @@ fn text_declaration_in_external_entity() {
 
 #[test]
 fn loader_returning_none_leaves_entity_unread() {
-    let mut p = Parser::new(EXTERNAL).with_external_loader(|_, _| None);
+    let mut p = Parser::new(EXTERNAL).with_external_loader(|_, _| Ok(None));
     while p.next_event().expect("unread external entity is fine").is_some() {}
+}
+
+#[test]
+fn loader_failure_is_an_error() {
+    let mut p = Parser::new(EXTERNAL).with_external_loader(|_, _| Err("no such file".into()));
+    let r = (|| { while p.next_event()?.is_some() {} Ok(()) })();
+    assert!(matches!(r, Err(XmlError::ExternalEntity { .. })), "got {r:?}");
 }
 
 // ─── Error positions ────────────────────────────────────────────────────────

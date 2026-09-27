@@ -93,7 +93,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Read external parsed entities with `load(system_id, public_id)`,
-    /// which returns the entity's text or `None` to leave it unread.
+    /// which returns `Ok(Some(text))`, `Ok(None)` to leave the entity
+    /// unread, or `Err(reason)` (reported as [`XmlError::ExternalEntity`]).
     ///
     /// Off by default: without a loader the parser never touches anything
     /// outside the input, which rules out XXE-style file disclosure. Only
@@ -101,7 +102,7 @@ impl<'a> Parser<'a> {
     /// defensively.
     pub fn with_external_loader(
         mut self,
-        load: impl FnMut(&str, Option<&str>) -> Option<String> + 'a,
+        load: impl FnMut(&str, Option<&str>) -> std::result::Result<Option<String>, String> + 'a,
     ) -> Self {
         self.loader = Some(Box::new(load));
         self

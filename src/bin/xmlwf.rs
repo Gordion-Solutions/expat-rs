@@ -38,20 +38,28 @@ fn main() -> ExitCode {
         }
     }
     let Some(path) = path else { return usage() };
-    let src = match std::fs::read_to_string(path) {
-        Ok(s)  => s,
+    let bytes = match std::fs::read(path) {
+        Ok(b)  => b,
         Err(e) => {
             eprintln!("{}: {}", path, e);
             return ExitCode::from(2);
+        }
+    };
+    let src = match expat_rs::decode(&bytes) {
+        Ok(s)  => s,
+        Err(e) => {
+            eprintln!("{}: {}", path, e);
+            return ExitCode::from(1);
         }
     };
 
     let mut parser = expat_rs::Parser::new(&src).with_edition(edition);
     if external {
         let base = Path::new(path).parent().unwrap_or(Path::new(".")).to_path_buf();
-        // Entities that can't be read as UTF-8 are left unread.
         parser = parser.with_external_loader(move |system_id, _public_id| {
-            std::fs::read_to_string(base.join(system_id)).ok()
+            let bytes = std::fs::read(base.join(system_id)).map_err(|e| e.to_string())?;
+            let text = expat_rs::decode(&bytes).map_err(|e| e.to_string())?;
+            Ok(Some(text.into_owned()))
         });
     }
     loop {
