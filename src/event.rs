@@ -46,6 +46,16 @@ pub enum Event<'a> {
     /// `<?target body?>`, excluding the XML declaration. Per §2.6.
     ProcessingInstruction { target: Cow<'a, str>, body: Cow<'a, str> },
 
+    /// End of the DOCTYPE. Events for what the internal subset contained
+    /// (processing instructions, comments, notation declarations) come
+    /// between `Doctype` and this, in document order. Mirrors libexpat's
+    /// end-doctype handler.
+    EndDoctype,
+
+    /// A notation declaration from the DTD (§4.7), between `Doctype` and
+    /// `EndDoctype`. Mirrors libexpat's `XML_SetNotationDeclHandler`.
+    NotationDecl { name: Cow<'a, str>, public_id: Option<Cow<'a, str>>, system_id: Option<Cow<'a, str>> },
+
     /// A reference in content to an entity whose text was not read: an
     /// external entity with no loader installed, or an undeclared entity
     /// where that is only a validity error. Mirrors libexpat's

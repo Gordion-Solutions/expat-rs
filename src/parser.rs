@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use crate::event::{normalize_newlines, Attribute, Event};
 use crate::lexer::Lexer;
 use crate::token::Token;
-use crate::entities::{DtdDecl, EntityTable, ExpansionLimits};
+use crate::entities::{AttDecl, AttlistTable, DtdDecl, EntityTable, ExpansionLimits};
 use crate::expand::{Expander, ExternalLoader};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -46,6 +46,8 @@ pub struct Parser<'a> {
     last_pos: Position,
     /// Entities declared by `<!ENTITY ...>` in the DOCTYPE internal subset.
     entities: EntityTable,
+    /// Attribute types and defaults from `<!ATTLIST>` declarations.
+    attlists: AttlistTable,
     edition: Edition,
     /// `standalone` from the XML declaration, if given.
     standalone: Option<bool>,
@@ -79,6 +81,7 @@ impl<'a> Parser<'a> {
             pending_end: None,
             last_pos: Position::start(),
             entities: EntityTable::new(),
+            attlists: AttlistTable::default(),
             edition: Edition::default(),
             standalone: None,
             entity_declared_wfc: true,
@@ -155,6 +158,7 @@ impl<'a> Parser<'a> {
     fn expander(&mut self) -> Expander<'_, 'a> {
         Expander::new(
             &self.entities,
+            &self.attlists,
             self.expansion_limits,
             self.edition,
             self.entity_declared_wfc,
@@ -180,25 +184,14 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Event attributes from a start tag's lexical attributes.
-    fn attributes(&mut self, attrs: Vec<crate::token::Attr<'a>>) -> Result<Vec<Attribute<'a>>> {
-        Ok(attrs
-            .into_iter()
-            .map(|a| Attribute { name: Cow::Borrowed(a.name), value: normalize_newlines(a.value), specified: true })
-            .collect())
-    }
-
-    /// Check the entity references in each attribute value.
-    fn check_attr_entities(&mut self, attributes: &[crate::token::Attr<'_>]) -> Result<()> {
-        for a in attributes {
-            if a.value.contains('&') {
-                let mut x = self.expander();
-                x.check_attr_value(a.value)?;
-                let used = x.expanded;
-                self.charge(used)?;
-            }
-        }
-        Ok(())
+    /// Event attributes for a start tag: normalised values (§3.3.3), entity
+    /// references checked and budgeted, declared defaults added.
+    fn attributes(&mut self, element: &str, attrs: Vec<crate::token::Attr<'a>>) -> Result<Vec<Attribute<'a>>> {
+        let mut x = self.expander();
+        let out = x.attributes(element, &attrs)?;
+        let used = x.expanded;
+        self.charge(used)?;
+        Ok(out)
     }
 
     /// Act on the internal subset's declarations in document order (§5.1).
@@ -207,23 +200,49 @@ impl<'a> Parser<'a> {
         let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef));
         self.entity_declared_wfc = self.standalone == Some(true)
             || (!dtd.external_subset && !has_pe_refs);
+        // Parameter entities are not read yet, so per §5.1 entity and
+        // attribute-list declarations after an unread one are not
+        // processed. Other declarations still are.
+        let mut after_unread_pe = false;
         for decl in dtd.decls {
             match decl {
+                DtdDecl::PeRef => after_unread_pe = true,
+                DtdDecl::Pi { target, body } => {
+                    self.queued.push_back(Event::ProcessingInstruction {
+                        target: Cow::Owned(target),
+                        body: Cow::Owned(normalize_newlines(&body).into_owned()),
+                    });
+                }
+                DtdDecl::Comment(body) => {
+                    self.queued.push_back(Event::Comment(Cow::Owned(normalize_newlines(&body).into_owned())));
+                }
+                DtdDecl::Notation { name, public_id, system_id } => {
+                    self.queued.push_back(Event::NotationDecl {
+                        name: Cow::Owned(name),
+                        public_id: public_id.map(Cow::Owned),
+                        system_id: system_id.map(Cow::Owned),
+                    });
+                }
+                _ if after_unread_pe => {}
                 DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
                 DtdDecl::Entity { parameter: true, .. } => {}
-                DtdDecl::AttDefault { value, pos } => {
-                    if value.contains('&') {
-                        let mut x = self.expander();
-                        x.pos = pos;
-                        x.check_attr_value(&value)?;
-                    }
+                DtdDecl::AttDef { element, name, cdata, default, pos } => {
+                    // Defaults are normalised, and their references checked,
+                    // at the point of declaration (Entity Declared requires
+                    // declaration before use here).
+                    let default = match default {
+                        Some(raw) => {
+                            let mut x = self.expander();
+                            x.pos = pos;
+                            Some(x.attr_value(&raw, cdata)?.into_owned())
+                        }
+                        None => None,
+                    };
+                    self.attlists.declare(element, AttDecl { name, cdata, default });
                 }
-                // Parameter entities are not read yet, so per §5.1 the
-                // entity and attribute-list declarations after an
-                // unread one must not be processed.
-                DtdDecl::PeRef => break,
             }
         }
+        self.queued.push_back(Event::EndDoctype);
         Ok(())
     }
 
@@ -288,11 +307,10 @@ impl<'a> Parser<'a> {
                 }
                 // QName check (Namespaces 1.0 §3) is opt-in via check_qname —
                 // pure XML 1.0 allows multiple colons in Names.
-                check_unique_attrs(&attributes, self.last_pos)?;
-                self.check_attr_entities(&attributes)?;
+                let attributes = self.attributes(name, attributes)?;
                 self.phase = Phase::Body;
                 self.stack.push(name);
-                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes: self.attributes(attributes)? }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes }))
             }
             Token::EmptyTag { name, attributes } => {
                 if self.phase == Phase::Epilog {
@@ -301,14 +319,13 @@ impl<'a> Parser<'a> {
                         reason: "second root element not allowed".into(),
                     });
                 }
-                check_unique_attrs(&attributes, self.last_pos)?;
-                self.check_attr_entities(&attributes)?;
+                let attributes = self.attributes(name, attributes)?;
                 // Push to mirror what a normal start tag does — the matching
                 // pending_end will pop it on the next call.
                 self.stack.push(name);
                 self.pending_end = Some(name);
                 self.phase = Phase::Body;
-                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes: self.attributes(attributes)? }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes }))
             }
             Token::EndTag(name) => {
                 let top = self.stack.pop().ok_or_else(|| XmlError::NotWellFormed {

@@ -68,8 +68,20 @@ fn main() -> ExitCode {
         });
     }
     let mut out = String::new();
+    // Second canonical form: a DOCTYPE listing the declared notations,
+    // written at the end of the DOCTYPE.
+    let mut doctype: Option<(String, Vec<Notation>)> = None;
     loop {
         match parser.next_event() {
+            Ok(Some(Event::Doctype { name, .. })) => doctype = Some((name.to_string(), Vec::new())),
+            Ok(Some(Event::NotationDecl { name, public_id, system_id })) => {
+                if let Some((_, notations)) = &mut doctype {
+                    notations.push((name.into_owned(), public_id.map(|p| p.into_owned()), system_id.map(|s| s.into_owned())));
+                }
+            }
+            Ok(Some(Event::EndDoctype)) => if let Some((root, notations)) = doctype.take() {
+                write_notations(&root, notations, &mut out);
+            },
             Ok(Some(e)) => if canonical { write_canonical(&e, &mut out) },
             Ok(None)    => {
                 if canonical {
@@ -83,6 +95,26 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+type Notation = (String, Option<String>, Option<String>);
+
+fn write_notations(root: &str, mut notations: Vec<Notation>, out: &mut String) {
+    if notations.is_empty() {
+        return;
+    }
+    notations.sort();
+    out.push_str(&format!("<!DOCTYPE {root} [\n"));
+    for (name, public_id, system_id) in &notations {
+        let id = match (public_id, system_id) {
+            (Some(p), Some(s)) => format!("PUBLIC '{p}' '{s}'"),
+            (Some(p), None)    => format!("PUBLIC '{p}'"),
+            (None, Some(s))    => format!("SYSTEM '{s}'"),
+            (None, None)       => String::new(),
+        };
+        out.push_str(&format!("<!NOTATION {name} {id}>\n"));
+    }
+    out.push_str("]>\n");
 }
 
 /// Append one event in canonical XML form: attributes sorted by name,
