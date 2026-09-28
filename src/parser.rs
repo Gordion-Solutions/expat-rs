@@ -22,6 +22,7 @@ use crate::lexer::Lexer;
 use crate::token::Token;
 use crate::entities::{AttDecl, AttlistTable, DtdDecl, EntityTable, ExpansionLimits};
 use crate::expand::{Expander, ExternalLoader};
+use crate::namespaces::Namespaces;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Phase {
@@ -62,6 +63,10 @@ pub struct Parser<'a> {
     /// Events from an expanded entity reference, delivered before the
     /// next token is read.
     queued: std::collections::VecDeque<Event<'a>>,
+    /// Namespace processing, if enabled, and the events it has produced
+    /// but not yet delivered.
+    namespaces: Option<Namespaces>,
+    ns_out: std::collections::VecDeque<Event<'a>>,
     expansion_limits: ExpansionLimits,
     /// Cumulative bytes of expanded entity content seen so far in this
     /// document. The per-reference budget alone doesn't catch the
@@ -87,6 +92,8 @@ impl<'a> Parser<'a> {
             entity_declared_wfc: true,
             loader: None,
             queued: std::collections::VecDeque::new(),
+            namespaces: None,
+            ns_out: std::collections::VecDeque::new(),
             expansion_limits: ExpansionLimits::default(),
             expanded_bytes_total: 0,
         }
@@ -98,6 +105,19 @@ impl<'a> Parser<'a> {
     pub fn with_edition(mut self, edition: Edition) -> Self {
         self.lexer = self.lexer.with_edition(edition);
         self.edition = edition;
+        if let Some(ns) = &mut self.namespaces {
+            ns.edition = edition;
+        }
+        self
+    }
+
+    /// Enable namespace processing (W3C Namespaces in XML 1.0): element
+    /// and attribute names are resolved to namespace names, `xmlns`
+    /// declarations are reported as `StartNamespace` / `EndNamespace`
+    /// events instead of attributes, and the namespace constraints are
+    /// enforced. Off by default, as in libexpat.
+    pub fn with_namespaces(mut self) -> Self {
+        self.namespaces = Some(Namespaces::new(self.edition));
         self
     }
 
@@ -126,6 +146,24 @@ impl<'a> Parser<'a> {
 
     /// Produce the next event, or `Ok(None)` at end of well-formed input.
     pub fn next_event(&mut self) -> Result<Option<Event<'a>>> {
+        loop {
+            if let Some(e) = self.ns_out.pop_front() {
+                return Ok(Some(e));
+            }
+            if self.namespaces.is_none() {
+                return self.next_xml_event();
+            }
+            let Some(e) = self.next_xml_event()? else { return Ok(None) };
+            let mut out = Vec::new();
+            if let Some(ns) = self.namespaces.as_mut() {
+                ns.process(e, self.last_pos, &mut out)?;
+            }
+            self.ns_out.extend(out);
+        }
+    }
+
+    /// The next event from XML 1.0 processing, before namespace processing.
+    fn next_xml_event(&mut self) -> Result<Option<Event<'a>>> {
         if let Some(e) = self.queued.pop_front() {
             return Ok(Some(e));
         }
@@ -224,6 +262,12 @@ impl<'a> Parser<'a> {
                     });
                 }
                 _ if after_unread_pe => {}
+                DtdDecl::Entity { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
+                    return Err(XmlError::NotWellFormed {
+                        pos: self.last_pos,
+                        reason: format!("entity name {name:?} contains a colon (Namespaces §7)"),
+                    });
+                }
                 DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
                 DtdDecl::Entity { parameter: true, .. } => {}
                 DtdDecl::AttDef { element, name, cdata, default, pos } => {
@@ -310,7 +354,7 @@ impl<'a> Parser<'a> {
                 let attributes = self.attributes(name, attributes)?;
                 self.phase = Phase::Body;
                 self.stack.push(name);
-                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), namespace: None, attributes }))
             }
             Token::EmptyTag { name, attributes } => {
                 if self.phase == Phase::Epilog {
@@ -325,7 +369,7 @@ impl<'a> Parser<'a> {
                 self.stack.push(name);
                 self.pending_end = Some(name);
                 self.phase = Phase::Body;
-                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), attributes }))
+                Ok(Some(Event::StartElement { name: Cow::Borrowed(name), namespace: None, attributes }))
             }
             Token::EndTag(name) => {
                 let top = self.stack.pop().ok_or_else(|| XmlError::NotWellFormed {
