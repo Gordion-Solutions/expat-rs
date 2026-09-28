@@ -44,6 +44,20 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// A lexer over text that continues a document already partly
+    /// tokenised (incremental parsing): no byte order mark is skipped and
+    /// no XML declaration is recognised. Positions are relative to `src`.
+    pub(crate) fn continuing(src: &'a str) -> Self {
+        Self {
+            src: src.as_bytes(),
+            pos: Position::start(),
+            first_invalid: first_invalid_char(src),
+            edition: Edition::default(),
+            doc_start: usize::MAX,
+            dtd: Dtd::default(),
+        }
+    }
+
     /// Current position: where the next token starts.
     pub fn position(&self) -> Position {
         self.pos

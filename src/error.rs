@@ -13,6 +13,16 @@ impl Position {
     pub const fn start() -> Self {
         Self { line: 1, column: 1, byte_offset: 0 }
     }
+
+    /// This position, measured within text that itself starts at `base`,
+    /// expressed relative to the whole input.
+    pub(crate) fn rebase(self, base: Position) -> Position {
+        Position {
+            line: base.line + self.line - 1,
+            column: if self.line == 1 { base.column + self.column - 1 } else { self.column },
+            byte_offset: base.byte_offset + self.byte_offset,
+        }
+    }
 }
 
 #[non_exhaustive]
@@ -37,6 +47,31 @@ pub enum XmlError {
     /// An external entity could not be loaded (the caller's loader failed).
     #[error("cannot load external entity at {pos:?}: {reason}")]
     ExternalEntity { pos: Position, reason: String },
+}
+
+impl XmlError {
+    /// Where the error occurred.
+    pub fn position(&self) -> Position {
+        match self {
+            XmlError::NotWellFormed { pos, .. }
+            | XmlError::UnexpectedEof { pos, .. }
+            | XmlError::InvalidChar { pos, .. }
+            | XmlError::Encoding { pos, .. }
+            | XmlError::ExternalEntity { pos, .. } => *pos,
+        }
+    }
+
+    /// The same error with its position rebased (see `Position::rebase`).
+    pub(crate) fn rebase(mut self, base: Position) -> XmlError {
+        match &mut self {
+            XmlError::NotWellFormed { pos, .. }
+            | XmlError::UnexpectedEof { pos, .. }
+            | XmlError::InvalidChar { pos, .. }
+            | XmlError::Encoding { pos, .. }
+            | XmlError::ExternalEntity { pos, .. } => *pos = pos.rebase(base),
+        }
+        self
+    }
 }
 
 pub type Result<T> = std::result::Result<T, XmlError>;
