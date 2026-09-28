@@ -41,6 +41,15 @@ History: 251 (text, line endings, char refs) → 281 (entity content) →
 remaining mismatches depend on declarations in external DTD subsets or
 parameter entities, which are not read yet.
 
+## Namespaces
+
+`namespaces.py` runs the W3C Namespaces in XML 1.0 tests
+(`eduni/namespaces/1.0` and errata) with `xmlwf --namespaces`:
+
+| | Result |
+|---|---:|
+| Namespaces 1.0 | **48 / 48** (3 `TYPE="error"` tests skipped) |
+
 ## Notes
 
 The total is the progression metric: it climbs as features land. It is
@@ -83,6 +92,7 @@ well-formedness categories); both are still unimplemented.
 - [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
 - [x] Accurate events: text with line endings normalised and references replaced, entity content, normalised attribute values, DTD defaults, notations, DTD PIs and comments
 - [x] Canonical-output checker (`output.py`)
+- [x] Namespaces in XML 1.0 (opt-in) — 48 / 48 W3C namespace tests
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Validity constraints — target match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — Python `pyexpat` works unmodified

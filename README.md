@@ -16,10 +16,10 @@ memory-safety bugs.
 > DTD defaults). On the W3C XML suite: **1441 / 1501 (96.0%)**
 > well-formedness tests that apply to the Fifth Edition (**1750 / 1810**
 > under Fourth Edition rules), and **327 / 373 (87.7%)** expected
-> canonical outputs matched. Not yet built: namespaces, incremental
-> (chunked) input, the external DTD subset and parameter-entity
-> expansion, DTD validation, and the libexpat C ABI. See
-> `conformance/STATUS.md`.
+> canonical outputs matched. Opt-in namespace processing passes all 48
+> W3C Namespaces 1.0 tests. Not yet built: incremental (chunked) input,
+> the external DTD subset and parameter-entity expansion, DTD
+> validation, and the libexpat C ABI. See `conformance/STATUS.md`.
 
 ## What this is
 
@@ -63,9 +63,10 @@ cargo test --release
 │   ├── entities.rs            # entity declarations and table
 │   ├── expand.rs              # entity expansion checks, bounded
 │   ├── encoding.rs            # byte → text decoding (UTF-8/16, ASCII, Latin-1)
+│   ├── namespaces.rs          # Namespaces in XML 1.0 layer (opt-in)
 │   ├── error.rs               # XmlError + Position
 │   └── bin/
-│       └── xmlwf.rs           # CLI checker (--edition, --external, --canonical)
+│       └── xmlwf.rs           # CLI checker (--edition, --external, --namespaces, --canonical)
 ├── tests/
 │   ├── tokeniser_tests.rs       # 21 tests, one per spec production
 │   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
@@ -74,7 +75,8 @@ cargo test --release
 │   ├── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
 │   ├── entity_semantics_tests.rs # 16 tests: replacement text, recursion, loader
 │   ├── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
-│   └── event_tests.rs           # 17 tests: what callers receive
+│   ├── event_tests.rs           # 17 tests: what callers receive
+│   └── namespace_tests.rs       # 8 tests: resolution, scoping, constraints
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
@@ -82,6 +84,7 @@ cargo test --release
     ├── runner.sh              # iterates the suite, reports pass/fail
     ├── editions.py            # which tests apply to which edition
     ├── output.py              # compares canonical output with expected files
+    ├── namespaces.py          # runs the W3C namespace tests
     └── STATUS.md              # current conformance numbers
 ```
 
@@ -109,7 +112,7 @@ if a consumer needs a feature in both).
 - [x] Encoding detection: UTF-8, UTF-16, US-ASCII, ISO-8859-1
 - [x] Accurate events: normalised text and attribute values, entity content,
       DTD default attributes, notations — 327 / 373 canonical outputs match
-- [ ] Namespaces (W3C XML Namespaces 1.0)
+- [x] Namespaces (W3C XML Namespaces 1.0), opt-in — 48 / 48 W3C tests
 - [ ] Incremental (chunked) input
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] DTD validity constraints
