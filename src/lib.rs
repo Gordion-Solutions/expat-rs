@@ -13,6 +13,7 @@ pub mod token;
 pub mod lexer;
 pub mod event;
 pub mod parser;
+pub mod stream;
 pub mod entities;
 pub mod encoding;
 
@@ -22,5 +23,7 @@ pub use error::{Position, XmlError, Result};
 pub use event::{local_name, Attribute, Event};
 pub use lexer::Lexer;
 pub use parser::Parser;
+pub use stream::StreamParser;
+pub use encoding::StreamDecoder;
 pub use token::{Attr, Token, XmlDecl};
 pub use entities::{EntityTable, ExpansionLimits};

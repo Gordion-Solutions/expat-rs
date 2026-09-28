@@ -14,6 +14,22 @@ impl Position {
         Self { line: 1, column: 1, byte_offset: 0 }
     }
 
+    /// The position just after `text`, which starts here. Columns count
+    /// characters.
+    pub(crate) fn advance(mut self, text: &str) -> Position {
+        for b in text.bytes() {
+            if b == b'\n' {
+                self.line += 1;
+                self.column = 1;
+            } else if b & 0xC0 != 0x80 {
+                // Not a UTF-8 continuation byte: a new character.
+                self.column += 1;
+            }
+        }
+        self.byte_offset += text.len();
+        self
+    }
+
     /// This position, measured within text that itself starts at `base`,
     /// expressed relative to the whole input.
     pub(crate) fn rebase(self, base: Position) -> Position {

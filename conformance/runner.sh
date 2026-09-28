@@ -21,13 +21,15 @@
 # edition (the EDITION attribute in xmlconf.xml) are skipped.
 #
 # xmlwf runs with --external so external parsed entities next to each test
-# file are read (the ext-sa tests depend on it).
+# file are read (the ext-sa tests depend on it). XMLWF_ARGS adds flags,
+# e.g. XMLWF_ARGS="--chunk 1" to parse incrementally, a byte at a time.
 
 set -e
 
 XMLCONF="${1:-/tmp/xmlconf-w3c/xmlconf}"
 XMLWF="${2:-$(dirname "$0")/../target/release/xmlwf}"
 EDITION="${EDITION:-5}"
+XMLWF_ARGS="${XMLWF_ARGS:-}"
 
 if [ ! -d "$XMLCONF" ]; then
     echo "ERROR: xmlconf directory not found: $XMLCONF" >&2
@@ -59,7 +61,7 @@ declare -a WF_FAILURES NOT_WF_FAILURES
 run_wf() {
     local file="$1"
     skip "$file" && return
-    if "$XMLWF" --edition "$EDITION" --external "$file" > /dev/null 2>&1; then
+    if "$XMLWF" --edition "$EDITION" --external $XMLWF_ARGS "$file" > /dev/null 2>&1; then
         WF_PASS=$((WF_PASS+1))
     else
         WF_FAIL=$((WF_FAIL+1))
@@ -71,7 +73,7 @@ run_wf() {
 run_not_wf() {
     local file="$1"
     skip "$file" && return
-    if "$XMLWF" --edition "$EDITION" --external "$file" > /dev/null 2>&1; then
+    if "$XMLWF" --edition "$EDITION" --external $XMLWF_ARGS "$file" > /dev/null 2>&1; then
         NOT_WF_FAIL=$((NOT_WF_FAIL+1))
         NOT_WF_FAILURES+=("$file")
     else

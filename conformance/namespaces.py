@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the W3C Namespaces in XML 1.0 tests (eduni/namespaces).
 
-Usage: [VERBOSE=1] namespaces.py <xmlconf-root> [<xmlwf-binary>]
+Usage: [VERBOSE=1] [XMLWF_ARGS=...] namespaces.py <xmlconf-root> [<xmlwf-binary>]
 
 Runs `xmlwf --namespaces --external` on each NS1.0 test: not-wf tests must
 be rejected; valid and invalid tests (which are namespace-well-formed)
@@ -33,7 +33,7 @@ def main():
                 skipped += 1
                 continue
             doc = os.path.join(os.path.dirname(path), attrs["URI"])
-            run = subprocess.run([xmlwf, "--namespaces", "--external", doc], capture_output=True)
+            run = subprocess.run([xmlwf, "--namespaces", "--external", *os.environ.get("XMLWF_ARGS", "").split(), doc], capture_output=True)
             ok = (run.returncode != 0) if kind == "not-wf" else (run.returncode == 0)
             if ok:
                 passed += 1

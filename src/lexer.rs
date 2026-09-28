@@ -126,19 +126,22 @@ impl<'a> Lexer<'a> {
     fn position_at(&self, byte_offset: usize) -> Position {
         let before = &self.src[..byte_offset];
         let line = 1 + before.iter().filter(|&&b| b == b'\n').count() as u32;
-        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        // A byte order mark isn't part of the document: line 1 starts after it.
+        let bom = if self.doc_start == usize::MAX { 0 } else { self.doc_start };
+        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(bom, |i| i + 1);
         let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
         Position { line, column, byte_offset }
     }
 
-    /// Advance past one byte, updating line/column.
+    /// Advance past one byte, updating line/column. Columns count
+    /// characters, so UTF-8 continuation bytes don't advance the column.
     fn bump(&mut self) {
         let b = self.src[self.pos.byte_offset];
         self.pos.byte_offset += 1;
         if b == b'\n' {
             self.pos.line += 1;
             self.pos.column = 1;
-        } else {
+        } else if b & 0xC0 != 0x80 {
             self.pos.column += 1;
         }
     }
