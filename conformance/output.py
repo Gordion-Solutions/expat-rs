@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check parser output against the W3C suite's expected canonical output.
 
-Usage: [EDITION=4|5] [VERBOSE=1] output.py <xmlconf-root> [<xmlwf-binary>]
+Usage: [EDITION=4|5] [VERBOSE=1] [XMLWF_ARGS=...] output.py <xmlconf-root> [<xmlwf-binary>]
 
 For every catalogue TEST of TYPE valid or invalid (both are well-formed)
 that names an OUTPUT file, runs `xmlwf --canonical --external` and compares
@@ -46,7 +46,7 @@ def main():
                 or attrs.get("NAMESPACE") == "yes" and "xml-1.1" in doc:
             skipped += 1
             continue
-        run = subprocess.run([xmlwf, "--edition", edition, "--external", "--canonical", doc],
+        run = subprocess.run([xmlwf, "--edition", edition, "--external", "--canonical", *os.environ.get("XMLWF_ARGS", "").split(), doc],
                              capture_output=True)
         with open(expected, "rb") as f:
             want = f.read()

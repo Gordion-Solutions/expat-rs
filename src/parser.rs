@@ -318,7 +318,9 @@ impl<'l> State<'l> {
             Token::Text(s) => {
                 // Per §2.1: character data only inside the root element.
                 if self.stack.is_empty() {
-                    if !s.bytes().all(|b| matches!(b, b' ' | b'\t' | b'\r' | b'\n')) {
+                    if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
+                        // Report the first character that isn't whitespace.
+                        self.last_pos = self.last_pos.advance(&s[..i]);
                         return Err(self.not_wf("non-whitespace text outside the root element"));
                     }
                     // Whitespace in the prolog/epilog is silently absorbed.
