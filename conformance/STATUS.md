@@ -50,6 +50,16 @@ parameter entities, which are not read yet.
 |---|---:|
 | Namespaces 1.0 | **48 / 48** (3 `TYPE="error"` tests skipped) |
 
+## Incremental parsing
+
+All three runners take `XMLWF_ARGS`; with `XMLWF_ARGS="--chunk 1"` (one
+byte at a time) and `"--chunk 7"`, `StreamParser` gives exactly the
+results above. Across all 2638 suite files at chunk sizes 1, 2, 5 and
+13, accept/reject and canonical output are identical to whole-document
+parsing, and so are error messages and positions except for one
+odd-length UTF-16 file (a streaming parser can't know the length until
+the end, so it reports the malformed text first).
+
 ## Notes
 
 The total is the progression metric: it climbs as features land. It is
@@ -93,6 +103,7 @@ well-formedness categories); both are still unimplemented.
 - [x] Accurate events: text with line endings normalised and references replaced, entity content, normalised attribute values, DTD defaults, notations, DTD PIs and comments
 - [x] Canonical-output checker (`output.py`)
 - [x] Namespaces in XML 1.0 (opt-in) — 48 / 48 W3C namespace tests
+- [x] Incremental (chunked) input: `StreamParser`, identical results at any chunk size
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Validity constraints — target match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — Python `pyexpat` works unmodified
