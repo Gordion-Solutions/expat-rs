@@ -17,9 +17,11 @@ memory-safety bugs.
 > well-formedness tests that apply to the Fifth Edition (**1750 / 1810**
 > under Fourth Edition rules), and **327 / 373 (87.7%)** expected
 > canonical outputs matched. Opt-in namespace processing passes all 48
-> W3C Namespaces 1.0 tests. Not yet built: incremental (chunked) input,
-> the external DTD subset and parameter-entity expansion, DTD
-> validation, and the libexpat C ABI. See `conformance/STATUS.md`.
+> W3C Namespaces 1.0 tests. Input can be whole (`Parser`) or pushed in
+> chunks (`StreamParser`, like libexpat's `XML_Parse`), with identical
+> results. Not yet built: the external DTD subset and parameter-entity
+> expansion, DTD validation, and the libexpat C ABI. See
+> `conformance/STATUS.md`.
 
 ## What this is
 
@@ -64,9 +66,10 @@ cargo test --release
 │   ├── expand.rs              # entity expansion checks, bounded
 │   ├── encoding.rs            # byte → text decoding (UTF-8/16, ASCII, Latin-1)
 │   ├── namespaces.rs          # Namespaces in XML 1.0 layer (opt-in)
+│   ├── stream.rs              # StreamParser: incremental (push) parsing
 │   ├── error.rs               # XmlError + Position
 │   └── bin/
-│       └── xmlwf.rs           # CLI checker (--edition, --external, --namespaces, --canonical)
+│       └── xmlwf.rs           # CLI checker (--edition, --external, --namespaces, --canonical, --chunk)
 ├── tests/
 │   ├── tokeniser_tests.rs       # 21 tests, one per spec production
 │   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
@@ -76,7 +79,8 @@ cargo test --release
 │   ├── entity_semantics_tests.rs # 16 tests: replacement text, recursion, loader
 │   ├── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
 │   ├── event_tests.rs           # 17 tests: what callers receive
-│   └── namespace_tests.rs       # 8 tests: resolution, scoping, constraints
+│   ├── namespace_tests.rs       # 8 tests: resolution, scoping, constraints
+│   └── stream_tests.rs          # 9 tests: every split point vs whole-document
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
@@ -113,7 +117,7 @@ if a consumer needs a feature in both).
 - [x] Accurate events: normalised text and attribute values, entity content,
       DTD default attributes, notations — 327 / 373 canonical outputs match
 - [x] Namespaces (W3C XML Namespaces 1.0), opt-in — 48 / 48 W3C tests
-- [ ] Incremental (chunked) input
+- [x] Incremental (chunked) input — `StreamParser`, same results at any chunk size
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] DTD validity constraints
 - [ ] Full W3C conformance — match libexpat's 1801/1809
