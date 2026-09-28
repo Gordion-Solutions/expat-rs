@@ -3,12 +3,13 @@
 //! Modelled after libexpat's `xmlwf`. Reads an XML file from a path argument
 //! and exits 0 if it is well-formed, non-zero otherwise. Errors go to stderr.
 //!
-//! Usage:  xmlwf [--edition 4|5] [--external] [--canonical] <path>
+//! Usage:  xmlwf [--edition 4|5] [--external] [--namespaces] [--canonical] <path>
 //!
 //! `--edition` selects the XML 1.0 edition whose Name rules apply
 //! (default 5). `--external` reads external parsed entities, resolving
 //! system identifiers relative to the document's directory; without it,
-//! nothing outside the named file is read. `--canonical` writes the
+//! nothing outside the named file is read. `--namespaces` enables
+//! namespace processing (Namespaces in XML 1.0). `--canonical` writes the
 //! document to stdout in James Clark's canonical XML form, the format of
 //! the W3C conformance suite's expected-output files.
 
@@ -21,12 +22,13 @@ use expat_rs::{Edition, Event};
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let usage = || {
-        eprintln!("usage: {} [--edition 4|5] [--external] [--canonical] <xml-file>", args[0]);
+        eprintln!("usage: {} [--edition 4|5] [--external] [--namespaces] [--canonical] <xml-file>", args[0]);
         ExitCode::from(2)
     };
     let mut edition = Edition::Fifth;
     let mut external = false;
     let mut canonical = false;
+    let mut namespaces = false;
     let mut path = None;
     let mut rest = args[1..].iter();
     while let Some(arg) = rest.next() {
@@ -38,6 +40,7 @@ fn main() -> ExitCode {
             },
             "--external" => external = true,
             "--canonical" => canonical = true,
+            "--namespaces" => namespaces = true,
             _ if path.is_none() => path = Some(arg),
             _ => return usage(),
         }
@@ -59,6 +62,9 @@ fn main() -> ExitCode {
     };
 
     let mut parser = expat_rs::Parser::new(&src).with_edition(edition);
+    if namespaces {
+        parser = parser.with_namespaces();
+    }
     if external {
         let base = Path::new(path).parent().unwrap_or(Path::new(".")).to_path_buf();
         parser = parser.with_external_loader(move |system_id, _public_id| {
@@ -122,7 +128,7 @@ fn write_notations(root: &str, mut notations: Vec<Notation>, out: &mut String) {
 /// and `& < > "` plus TAB, LF, CR escaped in text and attribute values.
 fn write_canonical(event: &Event<'_>, out: &mut String) {
     match event {
-        Event::StartElement { name, attributes } => {
+        Event::StartElement { name, attributes, .. } => {
             out.push('<');
             out.push_str(name);
             let mut attrs: Vec<_> = attributes.iter().collect();

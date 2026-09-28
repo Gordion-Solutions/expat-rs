@@ -174,7 +174,7 @@ fn defaults_apply_inside_entity_content() {
     let src = "<!DOCTYPE d [<!ATTLIST b x CDATA 'dv'><!ENTITY e '<b/>'>]><d>&e;</d>";
     let es = events(src);
     let b = es.iter().find_map(|e| match e {
-        Event::StartElement { name, attributes } if name == "b" => Some(attributes.clone()),
+        Event::StartElement { name, attributes, .. } if name == "b" => Some(attributes.clone()),
         _ => None,
     }).expect("<b> from entity");
     assert_eq!(b.len(), 1);

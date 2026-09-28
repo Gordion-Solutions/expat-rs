@@ -86,13 +86,14 @@ impl<'e, 'l> Expander<'e, 'l> {
         for a in attrs {
             let cdata = decls.iter().find(|d| d.name == a.name).is_none_or(|d| d.cdata);
             let value = self.attr_value(a.value, cdata)?;
-            out.push(Attribute { name: Cow::Borrowed(a.name), value, specified: true });
+            out.push(Attribute { name: Cow::Borrowed(a.name), namespace: None, value, specified: true });
         }
         for d in decls {
             if let Some(default) = &d.default {
                 if !attrs.iter().any(|a| a.name == d.name) {
                     out.push(Attribute {
                         name: Cow::Owned(d.name.clone()),
+                        namespace: None,
                         value: Cow::Owned(default.clone()),
                         specified: false,
                     });
@@ -245,12 +246,12 @@ impl<'e, 'l> Expander<'e, 'l> {
             match tok {
                 Token::StartTag { name: tag, attributes } => {
                     let attributes = self.tag_attributes(tag, &attributes)?;
-                    self.events.push(Event::StartElement { name: owned(tag), attributes });
+                    self.events.push(Event::StartElement { name: owned(tag), namespace: None, attributes });
                     open.push(tag);
                 }
                 Token::EmptyTag { name: tag, attributes } => {
                     let attributes = self.tag_attributes(tag, &attributes)?;
-                    self.events.push(Event::StartElement { name: owned(tag), attributes });
+                    self.events.push(Event::StartElement { name: owned(tag), namespace: None, attributes });
                     self.events.push(Event::EndElement(owned(tag)));
                 }
                 Token::EndTag(tag) => match open.pop() {
@@ -282,7 +283,7 @@ impl<'e, 'l> Expander<'e, 'l> {
     fn tag_attributes(&mut self, element: &str, attributes: &[Attr<'_>]) -> Result<Vec<Attribute<'static>>> {
         Ok(self.attributes(element, attributes)?
             .into_iter()
-            .map(|a| Attribute { name: owned(&a.name), value: owned(&a.value), specified: a.specified })
+            .map(|a| Attribute { name: owned(&a.name), namespace: None, value: owned(&a.value), specified: a.specified })
             .collect())
     }
 

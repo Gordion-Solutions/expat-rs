@@ -7,6 +7,7 @@
 mod chars;
 mod edition4;
 mod expand;
+mod namespaces;
 pub mod error;
 pub mod token;
 pub mod lexer;
@@ -18,7 +19,7 @@ pub mod encoding;
 pub use chars::Edition;
 pub use encoding::decode;
 pub use error::{Position, XmlError, Result};
-pub use event::{Attribute, Event};
+pub use event::{local_name, Attribute, Event};
 pub use lexer::Lexer;
 pub use parser::Parser;
 pub use token::{Attr, Token, XmlDecl};
