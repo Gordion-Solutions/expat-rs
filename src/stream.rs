@@ -12,6 +12,13 @@
 //! `\r\n` and `]]>` split across chunks are handled correctly and long
 //! text doesn't accumulate. An error is reported as soon as it can't be
 //! the result of truncation.
+//!
+//! Reparse deferral: when a chunk ends inside a construct, that construct
+//! is not re-scanned until the buffered input has at least doubled.
+//! Otherwise a single huge construct (a long comment, say) fed in small
+//! chunks would be re-scanned from its start every time, which is
+//! quadratic: the class of libexpat's CVE-2023-52425, fixed there the same
+//! way. Events are still delivered in order, at the latest by `finish`.
 
 use std::collections::VecDeque;
 
@@ -42,6 +49,9 @@ pub struct StreamParser<'l> {
     input: Option<Input>,
     /// A parser that has failed stays failed.
     failed: Option<XmlError>,
+    /// Size of `buf` when the last pass stopped at an incomplete construct
+    /// (0 if it didn't). See the module docs on reparse deferral.
+    stalled_at: usize,
     finished: bool,
 }
 
@@ -67,6 +77,7 @@ impl<'l> StreamParser<'l> {
             at_start: true,
             input: None,
             failed: None,
+            stalled_at: 0,
             finished: false,
         }
     }
@@ -148,6 +159,9 @@ impl<'l> StreamParser<'l> {
     /// Tokenise and handle as much of `buf` as is complete, then drop the
     /// consumed text.
     fn run(&mut self, last: bool, mut handler: impl FnMut(Event<'_>)) -> Result<()> {
+        if !last && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
+            return Ok(()); // reparse deferral: wait for more input
+        }
         let base = self.base;
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
             .with_edition(self.state.edition);
@@ -193,6 +207,8 @@ impl<'l> StreamParser<'l> {
             self.buf.drain(..end.byte_offset);
             self.at_start = false;
         }
+        // Whatever is left is an incomplete construct (or held-back text).
+        self.stalled_at = if last { 0 } else { self.buf.len() };
         Ok(())
     }
 }

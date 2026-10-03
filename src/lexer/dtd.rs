@@ -170,40 +170,47 @@ impl<'a> Lexer<'a> {
     ///   choice ::= '(' S? cp ( S? '|' S? cp )+ S? ')'
     ///   seq    ::= '(' S? cp ( S? ',' S? cp )* S? ')'
     ///
-    /// Also consumes the group's trailing occurrence indicator.
+    /// Also consumes the outermost group's occurrence indicator. Nested
+    /// groups are tracked on an explicit stack rather than by recursion, so
+    /// arbitrarily deep nesting can't overflow the call stack.
     fn scan_group_body(&mut self) -> Result<()> {
-        let mut separator = None;
+        // One entry per open group: the separator it uses, once seen.
+        let mut groups: Vec<Option<u8>> = vec![None];
         loop {
+            // A content particle: a nested group or a name.
             self.skip_whitespace();
-            self.scan_content_particle()?;
-            self.skip_whitespace();
-            match self.current() {
-                Some(b')') => {
-                    self.bump();
-                    self.skip_occurrence();
-                    return Ok(());
-                }
-                Some(c @ (b'|' | b',')) => {
-                    if separator.is_some_and(|s| s != c) {
-                        return Err(self.not_wf("cannot mix '|' and ',' in one content-model group"));
-                    }
-                    separator = Some(c);
-                    self.bump();
-                }
-                _ => return Err(self.eof_or_not_wf("element declaration",
-                                                   "expected '|', ',' or ')' in content model")),
+            if self.current() == Some(b'(') {
+                self.bump();
+                groups.push(None);
+                continue;
             }
-        }
-    }
-
-    fn scan_content_particle(&mut self) -> Result<()> {
-        if self.current() == Some(b'(') {
-            self.bump();
-            self.scan_group_body()
-        } else {
             self.scan_name()?;
             self.skip_occurrence();
-            Ok(())
+            // Then close groups, or a separator before the next particle.
+            loop {
+                self.skip_whitespace();
+                match self.current() {
+                    Some(b')') => {
+                        self.bump();
+                        self.skip_occurrence();
+                        groups.pop();
+                        if groups.is_empty() {
+                            return Ok(());
+                        }
+                    }
+                    Some(c @ (b'|' | b',')) => {
+                        let sep = groups.last_mut().expect("a group is open");
+                        if sep.is_some_and(|s| s != c) {
+                            return Err(self.not_wf("cannot mix '|' and ',' in one content-model group"));
+                        }
+                        *sep = Some(c);
+                        self.bump();
+                        break;
+                    }
+                    _ => return Err(self.eof_or_not_wf("element declaration",
+                                                       "expected '|', ',' or ')' in content model")),
+                }
+            }
         }
     }
 
