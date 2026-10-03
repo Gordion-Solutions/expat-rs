@@ -15,3 +15,4 @@ Cargo.lock.bak
 /conformance/xmlconf/
 /conformance/xmlts*.zip
 /conformance/out/
+bench-data/

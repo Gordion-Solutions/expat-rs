@@ -20,15 +20,32 @@ pub enum Token<'a> {
     /// XML declaration: `<?xml version="1.0" ...?>`. Per §2.8 [Production 23].
     XmlDecl(XmlDecl<'a>),
 
-    /// `<!DOCTYPE name ...>`. Per §2.8 [Production 28]. Body is not parsed
-    /// in week 1 — captured as a raw byte range.
-    Doctype { name: &'a str, body: &'a str },
+    /// `<!DOCTYPE name ...>`. Per §2.8 [Production 28]. The internal
+    /// subset is tokenised and checked by the lexer; `body` is the raw text
+    /// after the name.
+    Doctype {
+        /// The root element name the DOCTYPE declares.
+        name: &'a str,
+        /// The rest of the declaration as written (external ID and
+        /// internal subset), trimmed.
+        body: &'a str,
+    },
 
     /// Element start tag: `<name attr="value" ...>`. Per §3.1 [Production 40].
-    StartTag { name: &'a str, attributes: Vec<Attr<'a>> },
+    StartTag {
+        /// Element name as written.
+        name: &'a str,
+        /// Attributes as written (values not yet normalised).
+        attributes: Vec<Attr<'a>>,
+    },
 
     /// Empty-element tag: `<name attr="value" .../>`. Per §3.1 [Production 44].
-    EmptyTag  { name: &'a str, attributes: Vec<Attr<'a>> },
+    EmptyTag {
+        /// Element name as written.
+        name: &'a str,
+        /// Attributes as written (values not yet normalised).
+        attributes: Vec<Attr<'a>>,
+    },
 
     /// Element end tag: `</name>`. Per §3.1 [Production 42].
     EndTag(&'a str),
@@ -45,7 +62,12 @@ pub enum Token<'a> {
     Comment(&'a str),
 
     /// `<?target body?>`. Per §2.6 [Production 16].
-    ProcessingInstruction { target: &'a str, body: &'a str },
+    ProcessingInstruction {
+        /// The PI target.
+        target: &'a str,
+        /// Everything after the target and its following whitespace.
+        body: &'a str,
+    },
 
     /// `&name;` entity reference. Per §4.1 [Production 68].
     EntityRef(&'a str),
@@ -58,7 +80,10 @@ pub enum Token<'a> {
 /// A single attribute on an element. Per §3.1 [Production 41].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attr<'a> {
+    /// Attribute name as written.
     pub name: &'a str,
+    /// Value between the quotes, as written: references are checked but
+    /// not expanded, and whitespace is not normalised.
     pub value: &'a str,
     /// The opening position of the attribute name, for error reporting.
     pub pos: Position,
@@ -67,7 +92,10 @@ pub struct Attr<'a> {
 /// XML declaration components per §2.8 [Production 23–25].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct XmlDecl<'a> {
+    /// The `version` value, e.g. `"1.0"`.
     pub version: &'a str,
+    /// The `encoding` value, if given.
     pub encoding: Option<&'a str>,
+    /// `standalone="yes"` (`Some(true)`) or `"no"` (`Some(false)`), if given.
     pub standalone: Option<bool>,
 }

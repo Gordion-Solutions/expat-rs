@@ -1,26 +1,27 @@
 //! DTD entity declarations + safe expansion.
 //!
-//! The XML 1.0 spec [§4.7] permits internal general entity declarations of
+//! The XML 1.0 spec [§4.2] permits internal general entity declarations of
 //! the form:
 //!
 //!   <!ENTITY name "value">       — double-quoted
 //!   <!ENTITY name 'value'>       — single-quoted
 //!
-//! Entity values may themselves reference other entities. Naïve recursive
-//! expansion is the **billion laughs** vulnerability class:
+//! and external ones (`<!ENTITY name SYSTEM "uri">`, optionally unparsed
+//! with `NDATA`). Entity values may themselves reference other entities.
+//! Naïve recursive expansion is the **billion laughs** vulnerability class:
 //!
 //!   <!ENTITY a "AAA">
 //!   <!ENTITY b "&a;&a;&a;&a;&a;">     <!-- 5× a -->
 //!   <!ENTITY c "&b;&b;&b;&b;&b;">     <!-- 5×b = 25×a -->
 //!   ...                                <!-- exponential -->
 //!
-//! Mitigation here is a hard recursion-depth cap and a hard cumulative
-//! expansion-size cap. Either limit triggers an error rather than letting
-//! the parser allocate unbounded memory.
+//! Mitigation (in `crate::expand`) is a hard recursion-depth cap and a hard
+//! cumulative expansion-size cap. Either limit triggers an error rather
+//! than letting the parser do unbounded work.
 
 use std::collections::HashMap;
 use crate::chars::decode_char_ref;
-use crate::error::{Position, Result, XmlError};
+use crate::error::Position;
 
 /// Hard limits on entity expansion. Defaults match the conservative end of
 /// what's reasonable for adversarial input; library callers will be able to
@@ -38,119 +39,136 @@ impl Default for ExpansionLimits {
     fn default() -> Self {
         Self {
             max_depth: 20,
-            max_expanded_bytes: 1 * 1024 * 1024, // 1 MiB
+            max_expanded_bytes: 1024 * 1024, // 1 MiB
         }
     }
 }
 
+/// What a general entity was declared as (§4.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum EntityDef {
+    /// Internal entity. Holds the *replacement text*: the literal value with
+    /// character references already expanded (§4.5) and general entity
+    /// references left in place, to be expanded where the entity is used.
+    Internal(String),
+    /// External entity (§4.2.2). Unparsed if declared with `NDATA`.
+    External { system_id: String, public_id: Option<String>, unparsed: bool },
+}
+
+/// One declaration from the internal subset that the parser acts on, in
+/// document order. Order matters: §4.1 WFC Entity Declared requires an
+/// entity to be declared before it is referenced in an attribute default.
+#[derive(Clone, Debug)]
+pub(crate) enum DtdDecl {
+    Entity { name: String, parameter: bool, def: EntityDef },
+    /// One attribute definition from an attribute-list declaration (§3.3).
+    AttDef {
+        element: String,
+        name: String,
+        /// Declared type is CDATA. Other types get extra whitespace
+        /// normalisation (§3.3.3).
+        cdata: bool,
+        /// Default value as written between the quotes (plain or #FIXED);
+        /// `None` for #REQUIRED and #IMPLIED.
+        default: Option<String>,
+        pos: Position,
+    },
+    /// A processing instruction in the internal subset (§2.6).
+    Pi { target: String, body: String },
+    /// A comment in the internal subset (§2.5).
+    Comment(String),
+    /// A notation declaration (§4.7).
+    Notation { name: String, public_id: Option<String>, system_id: Option<String> },
+    /// A parameter-entity reference between declarations (§2.8 DeclSep).
+    /// Parameter entities are not expanded yet, so per §5.1 declarations
+    /// after one are not processed.
+    PeRef,
+}
+
+/// The parts of a DOCTYPE the parser needs after tokenising.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Dtd {
+    pub decls: Vec<DtdDecl>,
+    /// Whether the DOCTYPE names an external subset (SYSTEM / PUBLIC).
+    pub external_subset: bool,
+}
+
+/// Declared general entities, by name.
 #[derive(Default, Debug)]
-pub struct EntityTable {
-    /// name → literal value. The value may contain nested `&other;` references
-    /// which are resolved at expansion time (not at declaration time — that
-    /// would itself be vulnerable to billion-laughs).
-    entities: HashMap<String, String>,
+pub(crate) struct EntityTable {
+    entities: HashMap<String, EntityDef>,
 }
 
 impl EntityTable {
-    pub fn new() -> Self { Self::default() }
+    pub(crate) fn new() -> Self { Self::default() }
 
-    /// Add a declaration. Last-write-wins, mirroring upstream behaviour.
-    pub fn declare(&mut self, name: String, value: String) {
-        self.entities.insert(name, value);
+    /// Declare an internal entity whose literal value is `value`.
+    #[allow(dead_code)]
+    pub(crate) fn declare(&mut self, name: String, value: String) {
+        let text = expand_char_refs(&value);
+        self.declare_def(name, EntityDef::Internal(text));
     }
 
-    pub fn is_declared(&self, name: &str) -> bool {
+    /// Per §4.2, the first declaration of an entity is binding; later ones
+    /// are ignored.
+    pub(crate) fn declare_def(&mut self, name: String, def: EntityDef) {
+        self.entities.entry(name).or_insert(def);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_declared(&self, name: &str) -> bool {
         self.entities.contains_key(name)
     }
 
-    /// Compute the *length* a reference would expand to, recursing through
-    /// nested references with the given limits. Returns the byte length on
-    /// success, or an error if the limits are exceeded.
-    ///
-    /// We compute length without materialising the full string — this keeps
-    /// the implementation cheap and means a billion-laughs payload errors
-    /// out before we allocate anything large.
-    pub fn validate_expansion(&self, name: &str, limits: ExpansionLimits, pos: Position) -> Result<usize> {
-        let mut budget = limits.max_expanded_bytes;
-        self.validate_recursive(name, limits.max_depth, &mut budget, pos)
+    pub(crate) fn get(&self, name: &str) -> Option<&EntityDef> {
+        self.entities.get(name)
+    }
+}
+
+/// A declared attribute, from `<!ATTLIST>` (§3.3).
+#[derive(Clone, Debug)]
+pub(crate) struct AttDecl {
+    pub name: String,
+    /// Declared type is CDATA (no extra whitespace normalisation).
+    pub cdata: bool,
+    /// Normalised default value (plain or #FIXED), or `None` for
+    /// #REQUIRED / #IMPLIED.
+    pub default: Option<String>,
+}
+
+/// Attribute declarations by element name.
+#[derive(Default, Debug)]
+pub(crate) struct AttlistTable {
+    by_element: HashMap<String, ElementAtts>,
+}
+
+/// One element's declared attributes, in declaration order, with an index
+/// by name so lookups stay constant-time however many are declared.
+#[derive(Default, Debug)]
+pub(crate) struct ElementAtts {
+    pub decls: Vec<AttDecl>,
+    index: HashMap<String, usize>,
+}
+
+impl ElementAtts {
+    pub fn get(&self, name: &str) -> Option<&AttDecl> {
+        self.index.get(name).map(|&i| &self.decls[i])
+    }
+}
+
+impl AttlistTable {
+    /// Per §3.3, the first definition of an attribute for an element is
+    /// binding; later ones are ignored.
+    pub fn declare(&mut self, element: String, decl: AttDecl) {
+        let atts = self.by_element.entry(element).or_default();
+        if !atts.index.contains_key(&decl.name) {
+            atts.index.insert(decl.name.clone(), atts.decls.len());
+            atts.decls.push(decl);
+        }
     }
 
-    fn validate_recursive(
-        &self,
-        name: &str,
-        depth_remaining: usize,
-        budget: &mut usize,
-        pos: Position,
-    ) -> Result<usize> {
-        if depth_remaining == 0 {
-            return Err(XmlError::NotWellFormed {
-                pos,
-                reason: format!(
-                    "entity expansion of {name:?} exceeded the maximum nesting depth — \
-                     possible billion-laughs / quadratic-blowup payload"),
-            });
-        }
-        let value = match self.entities.get(name) {
-            Some(v) => v.as_str(),
-            None    => return Err(XmlError::NotWellFormed {
-                pos, reason: format!("undeclared entity {name:?}"),
-            }),
-        };
-
-        let mut total: usize = 0;
-        let bytes = value.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'&' {
-                // Find the ;
-                let start = i + 1;
-                let end = bytes[start..].iter().position(|&b| b == b';')
-                    .ok_or_else(|| XmlError::NotWellFormed {
-                        pos,
-                        reason: format!("malformed reference inside entity {name:?} — no ';'"),
-                    })? + start;
-                let inner = std::str::from_utf8(&bytes[start..end])
-                    .map_err(|_| XmlError::NotWellFormed {
-                        pos, reason: "non-UTF-8 in entity reference".into(),
-                    })?;
-                let added = if let Some(s) = builtin_entity(inner) {
-                    s.len()
-                } else if let Some(body) = inner.strip_prefix('#') {
-                    // Numeric character reference — validate, and charge its
-                    // real UTF-8 length against the budget.
-                    let c = decode_char_ref(body).map_err(|reason| XmlError::NotWellFormed {
-                        pos, reason: format!("{reason} in entity {name:?}"),
-                    })?;
-                    c.len_utf8()
-                } else {
-                    // Recursive entity reference
-                    self.validate_recursive(inner, depth_remaining - 1, budget, pos)?
-                };
-                if added > *budget {
-                    return Err(XmlError::NotWellFormed {
-                        pos,
-                        reason: format!(
-                            "entity expansion of {name:?} exceeded {} bytes — \
-                             possible billion-laughs / quadratic-blowup payload",
-                            crate::entities::ExpansionLimits::default().max_expanded_bytes),
-                    });
-                }
-                *budget -= added;
-                total = total.saturating_add(added);
-                i = end + 1;
-            } else {
-                if *budget == 0 {
-                    return Err(XmlError::NotWellFormed {
-                        pos,
-                        reason: format!("entity expansion of {name:?} exceeded byte budget"),
-                    });
-                }
-                *budget -= 1;
-                total = total.saturating_add(1);
-                i += 1;
-            }
-        }
-        Ok(total)
+    pub fn get(&self, element: &str) -> Option<&ElementAtts> {
+        self.by_element.get(element)
     }
 }
 
@@ -167,53 +185,27 @@ pub fn builtin_entity(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Parse `<!ENTITY name "value">` declarations out of a DOCTYPE internal
-/// subset's body text. Other declarations (`<!ELEMENT>`, `<!ATTLIST>`,
-/// `<!NOTATION>`) are skipped for now — week 4 only handles general entities.
-pub fn parse_internal_subset(body: &str, table: &mut EntityTable) {
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        // Find the next '<!ENTITY'
-        if bytes[i..].starts_with(b"<!ENTITY") {
-            i += b"<!ENTITY".len();
-            // Skip whitespace
-            while i < bytes.len() && matches!(bytes[i], b' '|b'\t'|b'\r'|b'\n') { i += 1; }
-            // Parameter entities (<!ENTITY % …>) are skipped in week 4.
-            if i < bytes.len() && bytes[i] == b'%' {
-                if let Some(end) = find_end_of_decl(bytes, i) { i = end; }
-                else { break; }
-                continue;
+/// Replacement text of an internal entity from its literal value (§4.5):
+/// character references are replaced by the characters they name; general
+/// entity references are kept as written. The lexer has already checked
+/// every reference in `literal`, so malformed ones are copied through.
+pub(crate) fn expand_char_refs(literal: &str) -> String {
+    let mut out = String::with_capacity(literal.len());
+    let mut rest = literal;
+    while let Some(i) = rest.find("&#") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find(';').map(|end| (end, decode_char_ref(&after[..end]))) {
+            Some((end, Ok(c))) => {
+                out.push(c);
+                rest = &after[end + 1..];
             }
-            // Read the name
-            let name_start = i;
-            while i < bytes.len() && !matches!(bytes[i], b' '|b'\t'|b'\r'|b'\n'|b'>') { i += 1; }
-            let name = match std::str::from_utf8(&bytes[name_start..i]) {
-                Ok(s) if !s.is_empty() => s.to_string(),
-                _ => { if let Some(end) = find_end_of_decl(bytes, i) { i = end; } else { break; } continue; }
-            };
-            // Skip whitespace
-            while i < bytes.len() && matches!(bytes[i], b' '|b'\t'|b'\r'|b'\n') { i += 1; }
-            // Read quoted value
-            if i >= bytes.len() || (bytes[i] != b'"' && bytes[i] != b'\'') {
-                if let Some(end) = find_end_of_decl(bytes, i) { i = end; } else { break; }
-                continue;
+            _ => {
+                out.push_str("&#");
+                rest = after;
             }
-            let quote = bytes[i];
-            i += 1;
-            let val_start = i;
-            while i < bytes.len() && bytes[i] != quote { i += 1; }
-            let value = std::str::from_utf8(&bytes[val_start..i]).unwrap_or("").to_string();
-            if i < bytes.len() { i += 1; } // consume closing quote
-            // Skip to end of declaration
-            if let Some(end) = find_end_of_decl(bytes, i) { i = end; }
-            table.declare(name, value);
-        } else {
-            i += 1;
         }
     }
-}
-
-fn find_end_of_decl(bytes: &[u8], from: usize) -> Option<usize> {
-    bytes[from..].iter().position(|&b| b == b'>').map(|p| from + p + 1)
+    out.push_str(rest);
+    out
 }
