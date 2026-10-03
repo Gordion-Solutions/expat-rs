@@ -339,11 +339,21 @@ impl<'a> Lexer<'a> {
 
     /// Top-level: produce the next token, or `Ok(None)` at end of input.
     pub fn next_token(&mut self) -> Result<Option<Token<'a>>> {
+        // Per §2.2: every character in the document must match Char. A
+        // text token stops just before an invalid character, so the text
+        // before it is handled (and any earlier error reported) first.
+        let invalid = |lexer: &Self, (offset, c): (usize, char)| {
+            XmlError::InvalidChar { pos: lexer.position_at(offset), char: c }
+        };
+        if let Some(bad @ (offset, _)) = self.first_invalid {
+            if offset == self.pos.byte_offset {
+                return Err(invalid(self, bad));
+            }
+        }
         let tok = self.scan_token()?;
-        // Per §2.2: every character in the document must match Char.
-        if let Some((offset, c)) = self.first_invalid {
+        if let Some(bad @ (offset, _)) = self.first_invalid {
             if offset < self.pos.byte_offset {
-                return Err(XmlError::InvalidChar { pos: self.position_at(offset), char: c });
+                return Err(invalid(self, bad));
             }
         }
         Ok(tok)
@@ -573,10 +583,15 @@ impl<'a> Lexer<'a> {
     /// Scan character data per §2.4 [Production 14] until the next `<` or `&`.
     fn scan_text(&mut self) -> Result<Token<'a>> {
         let start = self.pos.byte_offset;
+        let stop = self.first_invalid.map_or(usize::MAX, |(offset, _)| offset);
         while let Some(c) = self.current() {
-            if c == b'<' || c == b'&' { break; }
-            // Per §2.4: `]]>` MUST NOT occur in character data
+            if c == b'<' || c == b'&' || self.pos.byte_offset == stop { break; }
+            // Per §2.4: `]]>` MUST NOT occur in character data. Text before
+            // it is returned first, so any earlier error is reported first.
             if c == b']' && self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+                if self.pos.byte_offset > start {
+                    break;
+                }
                 return Err(XmlError::NotWellFormed {
                     pos: self.pos,
                     reason: "']]>' not allowed in character data".into(),
