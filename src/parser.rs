@@ -151,11 +151,7 @@ impl<'l> State<'l> {
     /// Deliver an event, through namespace processing if it is enabled.
     fn emit<'t>(&mut self, event: Event<'t>, out: &mut VecDeque<Event<'t>>) -> Result<()> {
         match &mut self.namespaces {
-            Some(ns) => {
-                let mut resolved = Vec::new();
-                ns.process(event, self.last_pos, &mut resolved)?;
-                out.extend(resolved);
-            }
+            Some(ns) => ns.process(event, self.last_pos, out)?,
             None => out.push_back(event),
         }
         Ok(())

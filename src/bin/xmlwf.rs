@@ -78,8 +78,8 @@ fn main() -> ExitCode {
                 parser = parser.with_external_loader(loader);
             }
             bytes.chunks(n.max(1))
-                .try_for_each(|piece| parser.feed(piece, |e| canon.event(e)))
-                .and_then(|()| parser.finish(|e| canon.event(e)))
+                .try_for_each(|piece| parser.feed(piece, |e| if canonical { canon.event(e) }))
+                .and_then(|()| parser.finish(|e| if canonical { canon.event(e) }))
         }
         None => (|| {
             let src = expat_rs::decode(&bytes)?;
@@ -91,7 +91,9 @@ fn main() -> ExitCode {
                 parser = parser.with_external_loader(loader);
             }
             while let Some(e) = parser.next_event()? {
-                canon.event(e);
+                if canonical {
+                    canon.event(e);
+                }
             }
             Ok(())
         })(),

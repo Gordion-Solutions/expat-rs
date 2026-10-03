@@ -16,6 +16,8 @@ use crate::token::{Attr, Token, XmlDecl};
 
 pub struct Lexer<'a> {
     src: &'a [u8],
+    /// The same input as `src`, as text: tokens are sliced from it.
+    text: &'a str,
     pos: Position,
     /// First character in the input that is not a §2.2 Char. Found with one
     /// up-front scan; reported as soon as a token reaches past it.
@@ -36,6 +38,7 @@ impl<'a> Lexer<'a> {
         let doc_start = if src.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 };
         Self {
             src: src.as_bytes(),
+            text: src,
             pos: Position { byte_offset: doc_start, ..Position::start() },
             first_invalid: first_invalid_char(src),
             edition: Edition::default(),
@@ -50,6 +53,7 @@ impl<'a> Lexer<'a> {
     pub(crate) fn continuing(src: &'a str) -> Self {
         Self {
             src: src.as_bytes(),
+            text: src,
             pos: Position::start(),
             first_invalid: first_invalid_char(src),
             edition: Edition::default(),
@@ -146,6 +150,40 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Move to `end` (≥ the current offset, on a character boundary),
+    /// updating line and column for everything passed over: the same rules
+    /// as `bump`, applied to the whole run at once.
+    fn advance_to(&mut self, end: usize) {
+        let run = &self.src[self.pos.byte_offset..end];
+        let chars = |s: &[u8]| s.iter().filter(|&&b| b & 0xC0 != 0x80).count() as u32;
+        match run.iter().rposition(|&b| b == b'\n') {
+            Some(last_nl) => {
+                self.pos.line += run.iter().filter(|&&b| b == b'\n').count() as u32;
+                self.pos.column = 1 + chars(&run[last_nl + 1..]);
+            }
+            None => self.pos.column += chars(run),
+        }
+        self.pos.byte_offset = end;
+    }
+
+    /// Advance to the next byte before `limit` for which `stop` holds and
+    /// return it, or advance to `limit` and return `None`. Only for ASCII
+    /// stop bytes, so the new position is a character boundary.
+    fn skip_until(&mut self, limit: usize, stop: impl Fn(u8) -> bool) -> Option<u8> {
+        let from = self.pos.byte_offset;
+        let limit = limit.min(self.src.len());
+        match self.src[from..limit].iter().position(|&b| stop(b)) {
+            Some(i) => {
+                self.advance_to(from + i);
+                Some(self.src[from + i])
+            }
+            None => {
+                self.advance_to(limit);
+                None
+            }
+        }
+    }
+
     fn peek(&self, n: usize) -> Option<u8> {
         self.src.get(self.pos.byte_offset + n).copied()
     }
@@ -172,13 +210,12 @@ impl<'a> Lexer<'a> {
         self.pos.byte_offset != start
     }
 
-    /// Return the slice from `start` to current byte offset.
+    /// Return the text from `start` to the current byte offset. Token
+    /// boundaries are always character boundaries (the lexer stops only on
+    /// ASCII delimiters or after whole characters); `str::get` checks that
+    /// in constant time and can't panic.
     fn slice(&self, start: usize) -> &'a str {
-        // SAFETY: `start..byte_offset` is always within the original `&str`
-        // because `bump` only ever increments through valid UTF-8 boundaries
-        // (we never bump mid-codepoint — this lexer is byte-oriented for ASCII
-        // metacharacters and treats non-ASCII as opaque payload bytes).
-        std::str::from_utf8(&self.src[start..self.pos.byte_offset]).unwrap_or("")
+        self.text.get(start..self.pos.byte_offset).unwrap_or("")
     }
 
     /// Decode the char at the current byte position. UTF-8 codepoints are
@@ -191,15 +228,11 @@ impl<'a> Lexer<'a> {
 
     /// Decode the char starting at `offset` (see `current_char`).
     fn char_at(&self, offset: usize) -> Option<(char, usize)> {
-        let bytes = self.src.get(offset..)?;
-        let len = match *bytes.first()? {
-            0x00..=0x7F => 1,
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            _           => 4,
-        };
-        let s = std::str::from_utf8(bytes.get(..len)?).ok()?;
-        let c = s.chars().next()?;
+        let b = *self.src.get(offset)?;
+        if b.is_ascii() {
+            return Some((b as char, 1));
+        }
+        let c = self.text.get(offset..)?.chars().next()?;
         Some((c, c.len_utf8()))
     }
 
@@ -247,18 +280,17 @@ impl<'a> Lexer<'a> {
         self.bump(); // consume opening quote
         let start = self.pos.byte_offset;
         loop {
-            match self.current() {
-                Some(c) if c == quote => {
-                    let s = self.slice(start);
-                    self.bump(); // consume closing quote
-                    return Ok(s);
-                }
+            match self.skip_until(usize::MAX, |b| b == quote || b == b'<' || b == b'&') {
                 Some(b'<') => return Err(XmlError::NotWellFormed {
                     pos: self.pos, reason: "'<' not allowed in attribute value".into(),
                 }),
                 // A literal '&' must begin a well-formed Reference.
                 Some(b'&') => { self.scan_reference()?; }
-                Some(_) => self.bump(),
+                Some(_) => {
+                    let s = self.slice(start);
+                    self.bump(); // consume closing quote
+                    return Ok(s);
+                }
                 None => return Err(XmlError::UnexpectedEof {
                     pos: self.pos, context: "AttValue",
                 }),
@@ -272,10 +304,10 @@ impl<'a> Lexer<'a> {
     fn scan_comment_body(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b'-').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "Comment" });
             }
-            if self.current() == Some(b'-') && self.peek(1) == Some(b'-') {
+            if self.peek(1) == Some(b'-') {
                 let body = self.slice(start);
                 // Per §2.5: "for compatibility, the string '--' MUST NOT occur
                 // within comments." If we see -- followed by anything other
@@ -298,10 +330,10 @@ impl<'a> Lexer<'a> {
     fn scan_cdata_body(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b']').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "CDATA" });
             }
-            if self.current() == Some(b']') && self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+            if self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
                 let body = self.slice(start);
                 self.bump(); self.bump(); self.bump();
                 return Ok(body);
@@ -309,6 +341,7 @@ impl<'a> Lexer<'a> {
             self.bump();
         }
     }
+
 
     /// Scan a processing instruction body per §2.6 [Production 16]:
     /// `<?target ...?>`. The leading `<?` has been consumed; the target is
@@ -325,10 +358,10 @@ impl<'a> Lexer<'a> {
         }
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b'?').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "PI" });
             }
-            if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
+            if self.peek(1) == Some(b'>') {
                 let body = self.slice(start);
                 self.bump(); self.bump();
                 return Ok(body);
@@ -583,12 +616,16 @@ impl<'a> Lexer<'a> {
     /// Scan character data per §2.4 [Production 14] until the next `<` or `&`.
     fn scan_text(&mut self) -> Result<Token<'a>> {
         let start = self.pos.byte_offset;
-        let stop = self.first_invalid.map_or(usize::MAX, |(offset, _)| offset);
-        while let Some(c) = self.current() {
-            if c == b'<' || c == b'&' || self.pos.byte_offset == stop { break; }
+        // Stop before an invalid character, so the text before it is
+        // handled (and any earlier error reported) first.
+        let stop = match self.first_invalid {
+            Some((offset, _)) if offset >= start => offset,
+            _ => usize::MAX,
+        };
+        while self.skip_until(stop, |b| b == b'<' || b == b'&' || b == b']') == Some(b']') {
             // Per §2.4: `]]>` MUST NOT occur in character data. Text before
             // it is returned first, so any earlier error is reported first.
-            if c == b']' && self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+            if self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
                 if self.pos.byte_offset > start {
                     break;
                 }
@@ -601,6 +638,7 @@ impl<'a> Lexer<'a> {
         }
         Ok(Token::Text(self.slice(start)))
     }
+
 
     /// Reference per §4.1 [Productions 66–68]: `&name;` or `&#nnn;` / `&#xhh;`.
     fn scan_reference(&mut self) -> Result<Token<'a>> {
