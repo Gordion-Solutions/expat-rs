@@ -14,6 +14,10 @@ use std::borrow::Cow;
 
 use crate::token::XmlDecl;
 
+/// Something the parser found in the document, in document order.
+///
+/// Strings are borrowed from the input where they can be used as written
+/// and owned where the parser changed them; `'a` is the input's lifetime.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event<'a> {
@@ -23,12 +27,23 @@ pub enum Event<'a> {
 
     /// `<!DOCTYPE name ...>`. May appear at most once, before the root
     /// element. Per §2.8 [Production 28].
-    Doctype { name: &'a str, body: &'a str },
+    Doctype {
+        /// The root element name the DOCTYPE declares.
+        name: &'a str,
+        /// The rest of the declaration as written, trimmed.
+        body: &'a str,
+    },
 
-    /// Element start (or empty-element). Per §3. `name` is the name as
-    /// written (a QName when namespaces are on); `namespace` is its
-    /// namespace name, set only when namespace processing is enabled.
-    StartElement { name: Cow<'a, str>, namespace: Option<Cow<'a, str>>, attributes: Vec<Attribute<'a>> },
+    /// Element start (or empty-element). Per §3.
+    StartElement {
+        /// The name as written (a QName when namespaces are on).
+        name: Cow<'a, str>,
+        /// Namespace name; set only when namespace processing is enabled
+        /// and the element is in a namespace.
+        namespace: Option<Cow<'a, str>>,
+        /// Specified attributes, then defaults declared in the DTD.
+        attributes: Vec<Attribute<'a>>,
+    },
 
     /// Element end. For empty-element tags (`<x/>`), the parser emits both
     /// a `StartElement` and an `EndElement` so callers see a uniform stream.
@@ -46,7 +61,12 @@ pub enum Event<'a> {
     Comment(Cow<'a, str>),
 
     /// `<?target body?>`, excluding the XML declaration. Per §2.6.
-    ProcessingInstruction { target: Cow<'a, str>, body: Cow<'a, str> },
+    ProcessingInstruction {
+        /// The PI target.
+        target: Cow<'a, str>,
+        /// Everything after the target and its following whitespace.
+        body: Cow<'a, str>,
+    },
 
     /// End of the DOCTYPE. Events for what the internal subset contained
     /// (processing instructions, comments, notation declarations) come
@@ -56,18 +76,34 @@ pub enum Event<'a> {
 
     /// A notation declaration from the DTD (§4.7), between `Doctype` and
     /// `EndDoctype`. Mirrors libexpat's `XML_SetNotationDeclHandler`.
-    NotationDecl { name: Cow<'a, str>, public_id: Option<Cow<'a, str>>, system_id: Option<Cow<'a, str>> },
+    NotationDecl {
+        /// The notation's name.
+        name: Cow<'a, str>,
+        /// Public identifier, if given.
+        public_id: Option<Cow<'a, str>>,
+        /// System identifier, if given.
+        system_id: Option<Cow<'a, str>>,
+    },
 
     /// A namespace declaration coming into scope, just before the
     /// `StartElement` that carries it (namespace processing only).
     /// `prefix` is `None` for the default namespace; `uri` is `None` when
     /// `xmlns=""` undeclares it. Mirrors libexpat's
     /// `XML_SetStartNamespaceDeclHandler`.
-    StartNamespace { prefix: Option<Cow<'a, str>>, uri: Option<Cow<'a, str>> },
+    StartNamespace {
+        /// The prefix declared, or `None` for the default namespace.
+        prefix: Option<Cow<'a, str>>,
+        /// The namespace name, or `None` when `xmlns=""` undeclares the
+        /// default namespace.
+        uri: Option<Cow<'a, str>>,
+    },
 
     /// A namespace declaration going out of scope, just after the matching
     /// `EndElement` (namespace processing only).
-    EndNamespace { prefix: Option<Cow<'a, str>> },
+    EndNamespace {
+        /// The prefix going out of scope, or `None` for the default.
+        prefix: Option<Cow<'a, str>>,
+    },
 
     /// A reference in content to an entity whose text was not read: an
     /// external entity with no loader installed, or an undeclared entity

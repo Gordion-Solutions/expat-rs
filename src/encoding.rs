@@ -142,6 +142,7 @@ pub struct StreamDecoder {
 }
 
 impl StreamDecoder {
+    /// A decoder that hasn't seen any input yet.
     pub fn new() -> Self {
         Self::default()
     }

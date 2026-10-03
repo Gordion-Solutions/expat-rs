@@ -43,12 +43,53 @@ A from-scratch Rust implementation of an XML 1.0 parser, designed to:
 libexpat parses XML in CPython's stdlib (xml.parsers.expat), Apache HTTPD's mod_dav, D-Bus, fontconfig, CMake, and many embedded systems. Bugs in libexpat translate directly to RCE in all of them.
 Replacing it with a memory-safe parser closes that path.
 
+## Usage
+
+```toml
+[dependencies]
+expat-rs = "0.2"
+```
+
+```rust
+use expat_rs::{Event, Parser};
+
+fn main() -> Result<(), expat_rs::XmlError> {
+    let mut parser = Parser::new("<greeting lang='en'>Hello, &amp; welcome</greeting>");
+    while let Some(event) = parser.next_event()? {
+        match event {
+            Event::StartElement { name, attributes, .. } => println!("<{name}> {} attribute(s)", attributes.len()),
+            Event::Text(text) => println!("text: {text}"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+- **Bytes:** `expat_rs::decode(&bytes)?` detects UTF-8, UTF-16, US-ASCII
+  and ISO-8859-1.
+- **Chunks:** `StreamParser::new()` then `feed(chunk, |event| ...)` and
+  `finish(...)`, like libexpat's `XML_Parse`.
+- **Namespaces:** `.with_namespaces()`.
+- **External entities:** never read unless you call
+  `.with_external_loader(...)`.
+
+Full documentation with examples: [docs.rs/expat-rs](https://docs.rs/expat-rs).
+The `xmlwf` binary checks files from the command line
+(`xmlwf --help` lists its options).
+
 ## Build & test
 
 ```sh
 cargo build --release
 cargo test --release
 ```
+
+Conformance: download the W3C suite and run `conformance/runner.sh`,
+`conformance/output.py` and `conformance/namespaces.py` (see
+`conformance/README.md`). Fuzzing: `cd fuzz && cargo +nightly fuzz run
+parse` (or `stream_vs_whole`). Benchmarks: `bench/generate.py` then
+`bench/compare.py`.
 
 ## Project layout
 
