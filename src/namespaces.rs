@@ -19,6 +19,7 @@
 //! events rather than as attributes, as libexpat does.
 
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 
 use crate::chars::{is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
@@ -31,9 +32,12 @@ pub(crate) const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 /// the default namespace; `None` name undeclares it.
 type Scope = Vec<(Option<String>, Option<String>)>;
 
-#[derive(Default)]
 pub(crate) struct Namespaces {
+    /// Declarations made by each open element, innermost last.
     scopes: Vec<Scope>,
+    /// Current binding stack for each prefix (innermost last), so a lookup
+    /// doesn't have to walk every open scope.
+    bindings: HashMap<Option<String>, Vec<Option<String>>>,
     pub edition: Edition,
 }
 
@@ -43,7 +47,7 @@ fn error(pos: Position, reason: String) -> XmlError {
 
 impl Namespaces {
     pub fn new(edition: Edition) -> Self {
-        Self { scopes: Vec::new(), edition }
+        Self { scopes: Vec::new(), bindings: HashMap::new(), edition }
     }
 
     /// Namespace name bound to `prefix` (`None`: the default namespace).
@@ -51,12 +55,10 @@ impl Namespaces {
         if prefix == Some("xml") {
             return Some(XML_NS);
         }
-        self.scopes
-            .iter()
-            .rev()
-            .flat_map(|scope| scope.iter().rev())
-            .find(|(p, _)| p.as_deref() == prefix)
-            .and_then(|(_, uri)| uri.as_deref())
+        self.bindings
+            .get(&prefix.map(str::to_string))
+            .and_then(|stack| stack.last())
+            .and_then(|uri| uri.as_deref())
     }
 
     /// §3: a QName is `NCName` or `NCName ':' NCName`. Returns the prefix.
@@ -83,6 +85,9 @@ impl Namespaces {
                 let scope = self.scopes.pop().unwrap_or_default();
                 out.push(Event::EndElement(name));
                 for (prefix, _) in scope.into_iter().rev() {
+                    if let Some(stack) = self.bindings.get_mut(&prefix) {
+                        stack.pop();
+                    }
                     out.push(Event::EndNamespace { prefix: prefix.map(Cow::Owned) });
                 }
                 Ok(())
@@ -149,6 +154,7 @@ impl Namespaces {
                 prefix: prefix.clone().map(Cow::Owned),
                 uri: uri.clone().map(Cow::Owned),
             });
+            self.bindings.entry(prefix.clone()).or_default().push(uri.clone());
             scope.push((prefix, uri));
         }
         self.scopes.push(scope);
@@ -165,6 +171,7 @@ impl Namespaces {
 
         // Attributes: unprefixed ones are in no namespace.
         let mut resolved: Vec<Attribute<'a>> = Vec::with_capacity(rest.len());
+        let mut expanded_names: HashSet<(String, String)> = HashSet::new();
         for mut a in rest {
             if let Some(p) = self.check_qname(&a.name, "attribute", pos)? {
                 let uri = self.lookup(Some(p))
@@ -172,10 +179,13 @@ impl Namespaces {
                 a.namespace = Some(Cow::Owned(uri.to_string()));
             }
             // §6.3 Attributes Unique: same local name and namespace name.
-            if resolved.iter().any(|b| b.namespace.is_some() && b.namespace == a.namespace
-                                        && b.local_name() == a.local_name()) {
-                return Err(error(pos, format!(
-                    "attribute {:?} duplicates another attribute's local name and namespace", a.name)));
+            // (Unprefixed attributes are in no namespace and were already
+            // checked for duplicate names.)
+            if let Some(ns) = &a.namespace {
+                if !expanded_names.insert((ns.to_string(), a.local_name().to_string())) {
+                    return Err(error(pos, format!(
+                        "attribute {:?} duplicates another attribute's local name and namespace", a.name)));
+                }
             }
             resolved.push(a);
         }

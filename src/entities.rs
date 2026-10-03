@@ -136,21 +136,36 @@ pub(crate) struct AttDecl {
 /// Attribute declarations by element name.
 #[derive(Default, Debug)]
 pub(crate) struct AttlistTable {
-    by_element: HashMap<String, Vec<AttDecl>>,
+    by_element: HashMap<String, ElementAtts>,
+}
+
+/// One element's declared attributes, in declaration order, with an index
+/// by name so lookups stay constant-time however many are declared.
+#[derive(Default, Debug)]
+pub(crate) struct ElementAtts {
+    pub decls: Vec<AttDecl>,
+    index: HashMap<String, usize>,
+}
+
+impl ElementAtts {
+    pub fn get(&self, name: &str) -> Option<&AttDecl> {
+        self.index.get(name).map(|&i| &self.decls[i])
+    }
 }
 
 impl AttlistTable {
     /// Per §3.3, the first definition of an attribute for an element is
     /// binding; later ones are ignored.
     pub fn declare(&mut self, element: String, decl: AttDecl) {
-        let decls = self.by_element.entry(element).or_default();
-        if !decls.iter().any(|d| d.name == decl.name) {
-            decls.push(decl);
+        let atts = self.by_element.entry(element).or_default();
+        if !atts.index.contains_key(&decl.name) {
+            atts.index.insert(decl.name.clone(), atts.decls.len());
+            atts.decls.push(decl);
         }
     }
 
-    pub fn get(&self, element: &str) -> &[AttDecl] {
-        self.by_element.get(element).map_or(&[], Vec::as_slice)
+    pub fn get(&self, element: &str) -> Option<&ElementAtts> {
+        self.by_element.get(element)
     }
 }
 

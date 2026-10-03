@@ -81,22 +81,25 @@ impl<'e, 'l> Expander<'e, 'l> {
     /// defaults the tag doesn't specify.
     pub fn attributes<'x>(&mut self, element: &str, attrs: &[Attr<'x>]) -> Result<Vec<Attribute<'x>>> {
         crate::parser::check_unique_attrs(attrs, self.pos)?;
-        let decls = self.attlists.get(element);
+        let declared = self.attlists.get(element);
         let mut out = Vec::with_capacity(attrs.len());
         for a in attrs {
-            let cdata = decls.iter().find(|d| d.name == a.name).is_none_or(|d| d.cdata);
+            let cdata = declared.and_then(|d| d.get(a.name)).is_none_or(|d| d.cdata);
             let value = self.attr_value(a.value, cdata)?;
             out.push(Attribute { name: Cow::Borrowed(a.name), namespace: None, value, specified: true });
         }
-        for d in decls {
-            if let Some(default) = &d.default {
-                if !attrs.iter().any(|a| a.name == d.name) {
-                    out.push(Attribute {
-                        name: Cow::Owned(d.name.clone()),
-                        namespace: None,
-                        value: Cow::Owned(default.clone()),
-                        specified: false,
-                    });
+        if let Some(declared) = declared {
+            let specified: std::collections::HashSet<&str> = attrs.iter().map(|a| a.name).collect();
+            for d in &declared.decls {
+                if let Some(default) = &d.default {
+                    if !specified.contains(d.name.as_str()) {
+                        out.push(Attribute {
+                            name: Cow::Owned(d.name.clone()),
+                            namespace: None,
+                            value: Cow::Owned(default.clone()),
+                            specified: false,
+                        });
+                    }
                 }
             }
         }

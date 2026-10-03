@@ -445,15 +445,21 @@ impl<'a> Parser<'a> {
 }
 
 /// Per §3.1 (Unique Att Spec): no element may have two attributes with the
-/// same name.
+/// same name. Hash-based above a handful of attributes, so an element with
+/// very many attributes costs linear, not quadratic, time.
 pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
-    for (i, a) in attrs.iter().enumerate() {
-        for b in &attrs[..i] {
-            if a.name == b.name {
-                return Err(XmlError::NotWellFormed {
-                    pos,
-                    reason: format!("duplicate attribute {:?}", a.name),
-                });
+    let duplicate = |name: &str| XmlError::NotWellFormed { pos, reason: format!("duplicate attribute {name:?}") };
+    if attrs.len() <= 8 {
+        for (i, a) in attrs.iter().enumerate() {
+            if attrs[..i].iter().any(|b| b.name == a.name) {
+                return Err(duplicate(a.name));
+            }
+        }
+    } else {
+        let mut seen = std::collections::HashSet::with_capacity(attrs.len());
+        for a in attrs {
+            if !seen.insert(a.name) {
+                return Err(duplicate(a.name));
             }
         }
     }
