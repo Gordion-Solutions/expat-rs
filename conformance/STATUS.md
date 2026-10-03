@@ -60,6 +60,42 @@ parsing, and so are error messages and positions except for one
 odd-length UTF-16 file (a streaming parser can't know the length until
 the end, so it reports the malformed text first).
 
+## Hardening
+
+**Resource limits.** Every input costs time linear in its size. Measured
+and fixed (each covered by `tests/resource_tests.rs`):
+
+| Input | Before | After |
+|---|---|---|
+| 100k nested groups in a DTD content model | stack overflow | 0.36 s |
+| 40k attributes on one element | 3.0 s (quadratic) | 0.02 s |
+| 20k namespaced attributes | 2.5 s | 0.02 s |
+| 20k declared + used attributes | 2.2 s | 0.03 s |
+| 50k nested elements with namespace declarations | 7.1 s | 0.13 s |
+| 4 MB comment streamed in 1 KB chunks (CVE-2023-52425 class) | 19.5 s | 0.03 s |
+
+Entity expansion is bounded by `ExpansionLimits`; external entities are
+never read without a loader.
+
+**Fuzzing** (`fuzz/`, cargo-fuzz): `parse` (any bytes, any options: must
+not panic) and `stream_vs_whole` (differential: streaming in fuzzer-chosen
+chunks must equal whole-document parsing). The differential target found
+one bug (two errors in one text run reported differently by the two
+modes; fixed so the earliest error wins). Since then both targets have
+run clean: no panics, timeouts, OOMs or disagreements.
+
+**Performance** (`bench/`): best-of-5 against libexpat 2.8.2's `xmlwf`
+on generated 25–56 MB documents, Intel i5-7600K:
+
+| Document | libexpat | expat-rs | Ratio |
+|---|---:|---:|---:|
+| records (attribute-heavy) | 95 MB/s | 75 MB/s | 0.79x |
+| articles (text-heavy) | 396 MB/s | 244 MB/s | 0.62x |
+| feed (namespaces) | 140 MB/s | 92 MB/s | 0.66x |
+| unicode (non-ASCII) | 192 MB/s | 107 MB/s | 0.56x |
+
+`StreamParser` in 64 KB chunks runs at the same speed as `Parser`.
+
 ## Notes
 
 The total is the progression metric: it climbs as features land. It is
@@ -104,6 +140,7 @@ well-formedness categories); both are still unimplemented.
 - [x] Canonical-output checker (`output.py`)
 - [x] Namespaces in XML 1.0 (opt-in) — 48 / 48 W3C namespace tests
 - [x] Incremental (chunked) input: `StreamParser`, identical results at any chunk size
+- [x] Hardening: linear-time on all inputs, fuzzing, benchmarks vs libexpat
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] Validity constraints — target match libexpat's 1801/1809
 - [ ] `libexpat.so` ABI shim — Python `pyexpat` works unmodified
