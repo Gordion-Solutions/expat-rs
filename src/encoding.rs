@@ -37,7 +37,7 @@ fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<Cow<'_, str>> 
     if !bytes.len().is_multiple_of(2) {
         return Err(error("UTF-16 input has an odd number of bytes".into()));
     }
-    let units = bytes.chunks_exact(2).map(|b| unit([b[0], b[1]]));
+    let units = bytes.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
     let text: String = char::decode_utf16(units)
         .collect::<std::result::Result<_, _>>()
         .map_err(|e| error(format!("invalid UTF-16: {e}")))?;
@@ -186,7 +186,7 @@ impl StreamDecoder {
                 if n >= 2 && !last && (0xD800..0xDC00).contains(&unit([self.pending[n - 2], self.pending[n - 1]])) {
                     n -= 2;
                 }
-                let units = self.pending[..n].chunks_exact(2).map(|b| unit([b[0], b[1]]));
+                let units = self.pending[..n].as_chunks::<2>().0.iter().map(|&pair| unit(pair));
                 for c in char::decode_utf16(units) {
                     out.push(c.map_err(|e| error(format!("invalid UTF-16: {e}")))?);
                 }
