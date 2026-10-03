@@ -19,9 +19,11 @@ memory-safety bugs.
 > canonical outputs matched. Opt-in namespace processing passes all 48
 > W3C Namespaces 1.0 tests. Input can be whole (`Parser`) or pushed in
 > chunks (`StreamParser`, like libexpat's `XML_Parse`), with identical
-> results. Not yet built: the external DTD subset and parameter-entity
-> expansion, DTD validation, and the libexpat C ABI. See
-> `conformance/STATUS.md`.
+> results. Hardened against hostile input (linear time on all inputs,
+> bounded entity expansion, no external reads by default) and fuzzed;
+> currently 0.56-0.79x libexpat's throughput. Not yet built: the
+> external DTD subset and parameter-entity expansion, DTD validation, and
+> the libexpat C ABI. See `conformance/STATUS.md`.
 
 ## What this is
 
@@ -80,7 +82,10 @@ cargo test --release
 │   ├── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
 │   ├── event_tests.rs           # 17 tests: what callers receive
 │   ├── namespace_tests.rs       # 8 tests: resolution, scoping, constraints
-│   └── stream_tests.rs          # 9 tests: every split point vs whole-document
+│   ├── stream_tests.rs          # 10 tests: every split point vs whole-document
+│   └── resource_tests.rs        # 7 tests: inputs that were quadratic or crashed
+├── fuzz/                      # cargo-fuzz targets (parse, stream_vs_whole)
+├── bench/                     # benchmark documents + comparison with libexpat
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
 └── conformance/
@@ -118,6 +123,7 @@ if a consumer needs a feature in both).
       DTD default attributes, notations — 327 / 373 canonical outputs match
 - [x] Namespaces (W3C XML Namespaces 1.0), opt-in — 48 / 48 W3C tests
 - [x] Incremental (chunked) input — `StreamParser`, same results at any chunk size
+- [x] Hardening — linear time on all inputs, cargo-fuzz targets, benchmarks vs libexpat
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] DTD validity constraints
 - [ ] Full W3C conformance — match libexpat's 1801/1809
