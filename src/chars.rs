@@ -24,6 +24,10 @@ pub enum Edition {
 
 /// Name start character under `edition`.
 pub(crate) fn is_name_start_char(c: char, edition: Edition) -> bool {
+    if c.is_ascii() {
+        // Same in both editions.
+        return c.is_ascii_alphabetic() || c == '_' || c == ':';
+    }
     match edition {
         Edition::Fifth  => is_name_start_char_5e(c),
         // 4th ed. [5] Name ::= (Letter | '_' | ':') (NameChar)*
@@ -33,6 +37,10 @@ pub(crate) fn is_name_start_char(c: char, edition: Edition) -> bool {
 
 /// Name character under `edition`.
 pub(crate) fn is_name_char(c: char, edition: Edition) -> bool {
+    if c.is_ascii() {
+        // Same in both editions.
+        return c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '-' | '.');
+    }
     match edition {
         Edition::Fifth => is_name_start_char_5e(c) || matches!(c,
             '-' | '.' | '0'..='9' | '\u{B7}' |
@@ -96,7 +104,24 @@ pub(crate) fn is_xml_char(c: char) -> bool {
 /// any. Every character of the document entity must match Char
 /// (§2.1 [Production 1], via `content`, `Misc`, etc.).
 pub(crate) fn first_invalid_char(s: &str) -> Option<(usize, char)> {
-    s.char_indices().find(|&(_, c)| !is_xml_char(c))
+    // Byte scan: in valid UTF-8 the only non-Chars are C0 controls other
+    // than TAB, LF and CR (single bytes), and U+FFFE / U+FFFF (EF BF BE,
+    // EF BF BF). Surrogates can't occur in a Rust string.
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    // Tight search for candidates (any C0 control, or 0xEF), then check.
+    while let Some(k) = bytes[i..].iter().position(|&b| b < 0x20 || b == 0xEF) {
+        i += k;
+        match bytes[i] {
+            b @ 0x00..=0x1F if !matches!(b, b'\t' | b'\n' | b'\r') => return Some((i, b as char)),
+            0xEF if bytes.get(i + 1) == Some(&0xBF) && matches!(bytes.get(i + 2), Some(0xBE | 0xBF)) => {
+                return Some((i, if bytes[i + 2] == 0xBE { '\u{FFFE}' } else { '\u{FFFF}' }));
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Decode the body of a character reference per §4.1 [Production 66]:

@@ -19,7 +19,7 @@
 //! events rather than as attributes, as libexpat does.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::chars::{is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
@@ -36,8 +36,9 @@ pub(crate) struct Namespaces {
     /// Declarations made by each open element, innermost last.
     scopes: Vec<Scope>,
     /// Current binding stack for each prefix (innermost last), so a lookup
-    /// doesn't have to walk every open scope.
-    bindings: HashMap<Option<String>, Vec<Option<String>>>,
+    /// doesn't have to walk every open scope. Keyed by prefix, with "" for
+    /// the default namespace (a real prefix is never empty).
+    bindings: HashMap<String, Vec<Option<String>>>,
     pub edition: Edition,
 }
 
@@ -56,7 +57,7 @@ impl Namespaces {
             return Some(XML_NS);
         }
         self.bindings
-            .get(&prefix.map(str::to_string))
+            .get(prefix.unwrap_or(""))
             .and_then(|stack| stack.last())
             .and_then(|uri| uri.as_deref())
     }
@@ -78,17 +79,17 @@ impl Namespaces {
     /// Process one event: resolve names on element starts, pop scopes on
     /// element ends, and check the other names that may not contain a
     /// colon. Pushes the resulting event(s) onto `out`.
-    pub fn process<'a>(&mut self, event: Event<'a>, pos: Position, out: &mut Vec<Event<'a>>) -> Result<()> {
+    pub fn process<'a>(&mut self, event: Event<'a>, pos: Position, out: &mut VecDeque<Event<'a>>) -> Result<()> {
         match event {
             Event::StartElement { name, attributes, .. } => self.start(name, attributes, pos, out),
             Event::EndElement(name) => {
                 let scope = self.scopes.pop().unwrap_or_default();
-                out.push(Event::EndElement(name));
+                out.push_back(Event::EndElement(name));
                 for (prefix, _) in scope.into_iter().rev() {
-                    if let Some(stack) = self.bindings.get_mut(&prefix) {
+                    if let Some(stack) = self.bindings.get_mut(prefix.as_deref().unwrap_or("")) {
                         stack.pop();
                     }
-                    out.push(Event::EndNamespace { prefix: prefix.map(Cow::Owned) });
+                    out.push_back(Event::EndNamespace { prefix: prefix.map(Cow::Owned) });
                 }
                 Ok(())
             }
@@ -102,7 +103,7 @@ impl Namespaces {
                 Err(error(pos, format!("entity name {name:?} contains a colon")))
             }
             other => {
-                out.push(other);
+                out.push_back(other);
                 Ok(())
             }
         }
@@ -113,23 +114,19 @@ impl Namespaces {
         name: Cow<'a, str>,
         attributes: Vec<Attribute<'a>>,
         pos: Position,
-        out: &mut Vec<Event<'a>>,
+        out: &mut VecDeque<Event<'a>>,
     ) -> Result<()> {
         // Declarations first: they apply to the element's own name and
         // attributes (including declarations defaulted from the DTD).
         let mut scope: Scope = Vec::new();
-        let mut rest = Vec::with_capacity(attributes.len());
-        for a in attributes {
+        let is_decl = |a: &Attribute<'_>| a.name == "xmlns" || a.name.starts_with("xmlns:");
+        let mut attributes = attributes;
+        for a in attributes.iter().filter(|a| is_decl(a)) {
             let prefix = if a.name == "xmlns" {
                 None
-            } else if let Some(p) = a.name.strip_prefix("xmlns:") {
-                if self.check_qname(&a.name, "attribute", pos)?.is_none() {
-                    unreachable!("'xmlns:' names always have a prefix");
-                }
-                Some(p.to_string())
             } else {
-                rest.push(a);
-                continue;
+                self.check_qname(&a.name, "attribute", pos)?;
+                a.name.strip_prefix("xmlns:").map(str::to_string)
             };
             let uri = a.value.as_ref();
             match prefix.as_deref() {
@@ -150,12 +147,15 @@ impl Namespaces {
                 _ => {}
             }
             let uri = (!uri.is_empty()).then(|| uri.to_string());
-            out.push(Event::StartNamespace {
+            out.push_back(Event::StartNamespace {
                 prefix: prefix.clone().map(Cow::Owned),
                 uri: uri.clone().map(Cow::Owned),
             });
-            self.bindings.entry(prefix.clone()).or_default().push(uri.clone());
+            self.bindings.entry(prefix.clone().unwrap_or_default()).or_default().push(uri.clone());
             scope.push((prefix, uri));
+        }
+        if !scope.is_empty() {
+            attributes.retain(|a| !is_decl(a));
         }
         self.scopes.push(scope);
 
@@ -170,9 +170,8 @@ impl Namespaces {
         .map(|uri| Cow::Owned(uri.to_string()));
 
         // Attributes: unprefixed ones are in no namespace.
-        let mut resolved: Vec<Attribute<'a>> = Vec::with_capacity(rest.len());
         let mut expanded_names: HashSet<(String, String)> = HashSet::new();
-        for mut a in rest {
+        for a in attributes.iter_mut() {
             if let Some(p) = self.check_qname(&a.name, "attribute", pos)? {
                 let uri = self.lookup(Some(p))
                     .ok_or_else(|| error(pos, format!("attribute prefix {p:?} is not declared")))?;
@@ -187,9 +186,8 @@ impl Namespaces {
                         "attribute {:?} duplicates another attribute's local name and namespace", a.name)));
                 }
             }
-            resolved.push(a);
         }
-        out.push(Event::StartElement { name, namespace, attributes: resolved });
+        out.push_back(Event::StartElement { name, namespace, attributes });
         Ok(())
     }
 }
