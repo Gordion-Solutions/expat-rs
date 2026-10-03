@@ -7,27 +7,120 @@
 //! Implements the lexical rules of W3C XML 1.0 (Fifth Edition) §2 and §3.
 //! Each non-trivial scan function carries a spec citation.
 
+mod dtd;
+
+use crate::entities::Dtd;
 use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
+/// Low-level tokeniser: turns a document into [`Token`]s, checking lexical
+/// rules (names, references, the syntax of each construct, §2.2
+/// characters) but not document structure. Most callers want
+/// [`crate::Parser`], which builds on it.
 pub struct Lexer<'a> {
     src: &'a [u8],
+    /// The same input as `src`, as text: tokens are sliced from it.
+    text: &'a str,
     pos: Position,
     /// First character in the input that is not a §2.2 Char. Found with one
     /// up-front scan; reported as soon as a token reaches past it.
     first_invalid: Option<(usize, char)>,
     /// Which edition's Name rules apply (§2.3 vs. 4th ed. Appendix B).
     edition: Edition,
+    /// Byte offset where the document proper starts: 0, or 3 after a UTF-8
+    /// byte order mark. The XML declaration is only recognised here.
+    doc_start: usize,
+    /// Declarations recorded while tokenising the DOCTYPE (see `dtd.rs`).
+    dtd: Dtd,
 }
 
 impl<'a> Lexer<'a> {
+    /// A lexer over a whole document. A leading byte order mark is skipped.
     pub fn new(src: &'a str) -> Self {
+        // §4.3.3 / Appendix F: a leading byte order mark is not part of the
+        // document's character data.
+        let doc_start = if src.starts_with('\u{FEFF}') { '\u{FEFF}'.len_utf8() } else { 0 };
         Self {
             src: src.as_bytes(),
+            text: src,
+            pos: Position { byte_offset: doc_start, ..Position::start() },
+            first_invalid: first_invalid_char(src),
+            edition: Edition::default(),
+            doc_start,
+            dtd: Dtd::default(),
+        }
+    }
+
+    /// A lexer over text that continues a document already partly
+    /// tokenised (incremental parsing): no byte order mark is skipped and
+    /// no XML declaration is recognised. Positions are relative to `src`.
+    pub(crate) fn continuing(src: &'a str) -> Self {
+        Self {
+            src: src.as_bytes(),
+            text: src,
             pos: Position::start(),
             first_invalid: first_invalid_char(src),
             edition: Edition::default(),
+            doc_start: usize::MAX,
+            dtd: Dtd::default(),
+        }
+    }
+
+    /// Current position: where the next token starts.
+    pub fn position(&self) -> Position {
+        self.pos
+    }
+
+    /// Take the declarations recorded by the most recent DOCTYPE token.
+    pub(crate) fn take_dtd(&mut self) -> Dtd {
+        std::mem::take(&mut self.dtd)
+    }
+
+    /// Skip a text declaration at the very start of an external parsed
+    /// entity, if there is one. §4.3.1 [Production 77]:
+    ///
+    ///   TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>'
+    ///
+    /// Unlike the XML declaration, `version` is optional, `encoding` is
+    /// required and `standalone` is not allowed.
+    pub(crate) fn skip_text_decl(&mut self) -> Result<()> {
+        let rest = &self.src[self.pos.byte_offset..];
+        let is_decl = rest.starts_with(b"<?xml")
+            && matches!(rest.get(5), Some(b' ' | b'\t' | b'\r' | b'\n'));
+        if !is_decl {
+            return Ok(());
+        }
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { pos, reason: reason.into() };
+        self.pos.byte_offset += 5;
+        self.pos.column += 5;
+        self.skip_whitespace();
+        if self.try_keyword(b"version") {
+            self.scan_eq()?;
+            let pos = self.pos;
+            let v = self.scan_attr_value()?;
+            if !self.is_valid_version(v) {
+                return Err(not_wf(pos, &format!("invalid XML version number {v:?}")));
+            }
+            if !self.skip_whitespace() {
+                return Err(not_wf(self.pos, "whitespace required before encoding in text declaration"));
+            }
+        }
+        if !self.try_keyword(b"encoding") {
+            return Err(not_wf(self.pos, "text declaration requires an encoding declaration"));
+        }
+        self.scan_eq()?;
+        let pos = self.pos;
+        let name = self.scan_attr_value()?;
+        if !is_valid_enc_name(name) {
+            return Err(not_wf(pos, &format!("invalid encoding name {name:?}")));
+        }
+        self.skip_whitespace();
+        if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
+            self.bump(); self.bump();
+            Ok(())
+        } else {
+            Err(not_wf(self.pos, "expected '?>' to close text declaration (standalone is not allowed here)"))
         }
     }
 
@@ -42,20 +135,57 @@ impl<'a> Lexer<'a> {
     fn position_at(&self, byte_offset: usize) -> Position {
         let before = &self.src[..byte_offset];
         let line = 1 + before.iter().filter(|&&b| b == b'\n').count() as u32;
-        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        // A byte order mark isn't part of the document: line 1 starts after it.
+        let bom = if self.doc_start == usize::MAX { 0 } else { self.doc_start };
+        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(bom, |i| i + 1);
         let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
         Position { line, column, byte_offset }
     }
 
-    /// Advance past one byte, updating line/column.
+    /// Advance past one byte, updating line/column. Columns count
+    /// characters, so UTF-8 continuation bytes don't advance the column.
     fn bump(&mut self) {
         let b = self.src[self.pos.byte_offset];
         self.pos.byte_offset += 1;
         if b == b'\n' {
             self.pos.line += 1;
             self.pos.column = 1;
-        } else {
+        } else if b & 0xC0 != 0x80 {
             self.pos.column += 1;
+        }
+    }
+
+    /// Move to `end` (≥ the current offset, on a character boundary),
+    /// updating line and column for everything passed over: the same rules
+    /// as `bump`, applied to the whole run at once.
+    fn advance_to(&mut self, end: usize) {
+        let run = &self.src[self.pos.byte_offset..end];
+        let chars = |s: &[u8]| s.iter().filter(|&&b| b & 0xC0 != 0x80).count() as u32;
+        match run.iter().rposition(|&b| b == b'\n') {
+            Some(last_nl) => {
+                self.pos.line += run.iter().filter(|&&b| b == b'\n').count() as u32;
+                self.pos.column = 1 + chars(&run[last_nl + 1..]);
+            }
+            None => self.pos.column += chars(run),
+        }
+        self.pos.byte_offset = end;
+    }
+
+    /// Advance to the next byte before `limit` for which `stop` holds and
+    /// return it, or advance to `limit` and return `None`. Only for ASCII
+    /// stop bytes, so the new position is a character boundary.
+    fn skip_until(&mut self, limit: usize, stop: impl Fn(u8) -> bool) -> Option<u8> {
+        let from = self.pos.byte_offset;
+        let limit = limit.min(self.src.len());
+        match self.src[from..limit].iter().position(|&b| stop(b)) {
+            Some(i) => {
+                self.advance_to(from + i);
+                Some(self.src[from + i])
+            }
+            None => {
+                self.advance_to(limit);
+                None
+            }
         }
     }
 
@@ -85,13 +215,12 @@ impl<'a> Lexer<'a> {
         self.pos.byte_offset != start
     }
 
-    /// Return the slice from `start` to current byte offset.
+    /// Return the text from `start` to the current byte offset. Token
+    /// boundaries are always character boundaries (the lexer stops only on
+    /// ASCII delimiters or after whole characters); `str::get` checks that
+    /// in constant time and can't panic.
     fn slice(&self, start: usize) -> &'a str {
-        // SAFETY: `start..byte_offset` is always within the original `&str`
-        // because `bump` only ever increments through valid UTF-8 boundaries
-        // (we never bump mid-codepoint — this lexer is byte-oriented for ASCII
-        // metacharacters and treats non-ASCII as opaque payload bytes).
-        std::str::from_utf8(&self.src[start..self.pos.byte_offset]).unwrap_or("")
+        self.text.get(start..self.pos.byte_offset).unwrap_or("")
     }
 
     /// Decode the char at the current byte position. UTF-8 codepoints are
@@ -104,15 +233,11 @@ impl<'a> Lexer<'a> {
 
     /// Decode the char starting at `offset` (see `current_char`).
     fn char_at(&self, offset: usize) -> Option<(char, usize)> {
-        let bytes = self.src.get(offset..)?;
-        let len = match *bytes.first()? {
-            0x00..=0x7F => 1,
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            _           => 4,
-        };
-        let s = std::str::from_utf8(bytes.get(..len)?).ok()?;
-        let c = s.chars().next()?;
+        let b = *self.src.get(offset)?;
+        if b.is_ascii() {
+            return Some((b as char, 1));
+        }
+        let c = self.text.get(offset..)?.chars().next()?;
         Some((c, c.len_utf8()))
     }
 
@@ -145,8 +270,9 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scan an attribute value per §3.1 [Production 10]: AttValue ::= '"' ([^<&"] | Reference)* '"'
-    /// (or single-quoted variant). Returns the *literal* slice between the
-    /// quotes; entity expansion happens later in the parser layer.
+    /// (or single-quoted variant). References are syntax-checked (and
+    /// character references validated) but not expanded; the *literal*
+    /// slice between the quotes is returned.
     fn scan_attr_value(&mut self) -> Result<&'a str> {
         let quote = match self.current() {
             Some(q @ (b'"' | b'\'')) => q,
@@ -159,16 +285,17 @@ impl<'a> Lexer<'a> {
         self.bump(); // consume opening quote
         let start = self.pos.byte_offset;
         loop {
-            match self.current() {
-                Some(c) if c == quote => {
+            match self.skip_until(usize::MAX, |b| b == quote || b == b'<' || b == b'&') {
+                Some(b'<') => return Err(XmlError::NotWellFormed {
+                    pos: self.pos, reason: "'<' not allowed in attribute value".into(),
+                }),
+                // A literal '&' must begin a well-formed Reference.
+                Some(b'&') => { self.scan_reference()?; }
+                Some(_) => {
                     let s = self.slice(start);
                     self.bump(); // consume closing quote
                     return Ok(s);
                 }
-                Some(b'<') => return Err(XmlError::NotWellFormed {
-                    pos: self.pos, reason: "'<' not allowed in attribute value".into(),
-                }),
-                Some(_) => self.bump(),
                 None => return Err(XmlError::UnexpectedEof {
                     pos: self.pos, context: "AttValue",
                 }),
@@ -182,10 +309,10 @@ impl<'a> Lexer<'a> {
     fn scan_comment_body(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b'-').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "Comment" });
             }
-            if self.current() == Some(b'-') && self.peek(1) == Some(b'-') {
+            if self.peek(1) == Some(b'-') {
                 let body = self.slice(start);
                 // Per §2.5: "for compatibility, the string '--' MUST NOT occur
                 // within comments." If we see -- followed by anything other
@@ -208,10 +335,10 @@ impl<'a> Lexer<'a> {
     fn scan_cdata_body(&mut self) -> Result<&'a str> {
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b']').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "CDATA" });
             }
-            if self.current() == Some(b']') && self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+            if self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
                 let body = self.slice(start);
                 self.bump(); self.bump(); self.bump();
                 return Ok(body);
@@ -219,6 +346,7 @@ impl<'a> Lexer<'a> {
             self.bump();
         }
     }
+
 
     /// Scan a processing instruction body per §2.6 [Production 16]:
     /// `<?target ...?>`. The leading `<?` has been consumed; the target is
@@ -235,10 +363,10 @@ impl<'a> Lexer<'a> {
         }
         let start = self.pos.byte_offset;
         loop {
-            if self.is_eof() {
+            if self.skip_until(usize::MAX, |b| b == b'?').is_none() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "PI" });
             }
-            if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
+            if self.peek(1) == Some(b'>') {
                 let body = self.slice(start);
                 self.bump(); self.bump();
                 return Ok(body);
@@ -249,11 +377,21 @@ impl<'a> Lexer<'a> {
 
     /// Top-level: produce the next token, or `Ok(None)` at end of input.
     pub fn next_token(&mut self) -> Result<Option<Token<'a>>> {
+        // Per §2.2: every character in the document must match Char. A
+        // text token stops just before an invalid character, so the text
+        // before it is handled (and any earlier error reported) first.
+        let invalid = |lexer: &Self, (offset, c): (usize, char)| {
+            XmlError::InvalidChar { pos: lexer.position_at(offset), char: c }
+        };
+        if let Some(bad @ (offset, _)) = self.first_invalid {
+            if offset == self.pos.byte_offset {
+                return Err(invalid(self, bad));
+            }
+        }
         let tok = self.scan_token()?;
-        // Per §2.2: every character in the document must match Char.
-        if let Some((offset, c)) = self.first_invalid {
+        if let Some(bad @ (offset, _)) = self.first_invalid {
             if offset < self.pos.byte_offset {
-                return Err(XmlError::InvalidChar { pos: self.position_at(offset), char: c });
+                return Err(invalid(self, bad));
             }
         }
         Ok(tok)
@@ -275,6 +413,7 @@ impl<'a> Lexer<'a> {
     /// Dispatch on whatever follows a `<`.
     fn scan_open_construct(&mut self) -> Result<Token<'a>> {
         debug_assert_eq!(self.current(), Some(b'<'));
+        let start = self.pos.byte_offset;
         match self.peek(1) {
             Some(b'/') => {
                 self.bump(); self.bump(); // </
@@ -309,9 +448,20 @@ impl<'a> Lexer<'a> {
             Some(b'?') => {
                 self.bump(); self.bump(); // <?
                 let target = self.scan_name()?;
-                // §2.8: <?xml ...?> is the XML declaration, with constraints
-                if target.eq_ignore_ascii_case("xml") {
+                // §2.8: `<?xml` is the XML declaration, and only at the very
+                // start of the document. §2.6: any other target matching
+                // [Xx][Mm][Ll] is reserved.
+                if target == "xml" && start == self.doc_start {
                     self.scan_xmldecl_after_target()
+                } else if target.eq_ignore_ascii_case("xml") {
+                    Err(XmlError::NotWellFormed {
+                        pos: self.pos,
+                        reason: if target == "xml" {
+                            "XML declaration allowed only at the start of the document".into()
+                        } else {
+                            format!("processing instruction target {target:?} is reserved")
+                        },
+                    })
                 } else {
                     let body = self.scan_pi_body()?;
                     Ok(Token::ProcessingInstruction { target, body })
@@ -375,55 +525,83 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// XML declaration per §2.8 [Production 23]: `<?xml VersionInfo ?>` —
-    /// the leading `<?xml` has been consumed; `target` was already verified.
+    /// XML declaration per §2.8 [Productions 23–26, 32, 80, 81]; the
+    /// leading `<?xml` has been consumed.
+    ///
+    ///   XMLDecl      ::= '<?xml' VersionInfo EncodingDecl? SDDecl? S? '?>'
+    ///   VersionInfo  ::= S 'version' Eq ("'" VersionNum "'" | '"' VersionNum '"')
+    ///   EncodingDecl ::= S 'encoding' Eq ('"' EncName '"' | "'" EncName "'")
+    ///   SDDecl       ::= S 'standalone' Eq (("'" ('yes' | 'no') "'") | ('"' ('yes' | 'no') '"'))
+    ///
+    /// The three pseudo-attributes are each preceded by required S and must
+    /// appear in this order.
     fn scan_xmldecl_after_target(&mut self) -> Result<Token<'a>> {
-        // Required: version="..."
-        self.skip_whitespace();
-        self.expect_keyword(b"version")?;
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { pos, reason: reason.into() };
+
+        if !self.skip_whitespace() || !self.try_keyword(b"version") {
+            return Err(not_wf(self.pos, "XML declaration must start with version"));
+        }
+        self.scan_eq()?;
+        let version_pos = self.pos;
+        let version = self.scan_attr_value()?;
+        if !self.is_valid_version(version) {
+            return Err(not_wf(version_pos, &format!("invalid XML version number {version:?}")));
+        }
+
+        let mut had_space = self.skip_whitespace();
+        let mut encoding = None;
+        if had_space && self.try_keyword(b"encoding") {
+            self.scan_eq()?;
+            let enc_pos = self.pos;
+            let name = self.scan_attr_value()?;
+            if !is_valid_enc_name(name) {
+                return Err(not_wf(enc_pos, &format!("invalid encoding name {name:?}")));
+            }
+            encoding = Some(name);
+            had_space = self.skip_whitespace();
+        }
+
+        let mut standalone = None;
+        if had_space && self.try_keyword(b"standalone") {
+            self.scan_eq()?;
+            let sd_pos = self.pos;
+            standalone = Some(match self.scan_attr_value()? {
+                "yes" => true,
+                "no"  => false,
+                other => return Err(not_wf(sd_pos, &format!("standalone must be 'yes' or 'no', got {other:?}"))),
+            });
+            self.skip_whitespace();
+        }
+
+        if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
+            self.bump(); self.bump();
+            return Ok(Token::XmlDecl(XmlDecl { version, encoding, standalone }));
+        }
+        if self.is_eof() {
+            return Err(XmlError::UnexpectedEof { pos: self.pos, context: "XML declaration" });
+        }
+        Err(not_wf(self.pos, "unexpected content in XML declaration \
+                              (expected version, encoding, standalone in that order, then '?>')"))
+    }
+
+    /// §2.3 [Production 25]: Eq ::= S? '=' S?
+    fn scan_eq(&mut self) -> Result<()> {
         self.skip_whitespace();
         if self.current() != Some(b'=') {
-            return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected '=' after version".into() });
+            return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected '='".into() });
         }
-        self.bump(); self.skip_whitespace();
-        let version = self.scan_attr_value()?;
+        self.bump();
+        self.skip_whitespace();
+        Ok(())
+    }
 
-        let mut encoding = None;
-        let mut standalone = None;
-        loop {
-            self.skip_whitespace();
-            if self.current() == Some(b'?') && self.peek(1) == Some(b'>') {
-                self.bump(); self.bump();
-                return Ok(Token::XmlDecl(XmlDecl { version, encoding, standalone }));
-            }
-            // optional encoding=, standalone= in any order (relaxed for week 1)
-            if self.try_keyword(b"encoding") {
-                self.skip_whitespace();
-                if self.current() != Some(b'=') {
-                    return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected '=' after encoding".into() });
-                }
-                self.bump(); self.skip_whitespace();
-                encoding = Some(self.scan_attr_value()?);
-            } else if self.try_keyword(b"standalone") {
-                self.skip_whitespace();
-                if self.current() != Some(b'=') {
-                    return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected '=' after standalone".into() });
-                }
-                self.bump(); self.skip_whitespace();
-                let v = self.scan_attr_value()?;
-                standalone = Some(match v {
-                    "yes" => true,
-                    "no"  => false,
-                    other => return Err(XmlError::NotWellFormed {
-                        pos: self.pos,
-                        reason: format!("standalone must be 'yes' or 'no', got {other:?}"),
-                    }),
-                });
-            } else {
-                return Err(XmlError::NotWellFormed {
-                    pos: self.pos, reason: "unexpected token in XML declaration".into(),
-                });
-            }
+    /// §2.8 [Production 26]: VersionNum. Fifth Edition: '1.' [0-9]+;
+    /// Fourth Edition: exactly '1.0'.
+    fn is_valid_version(&self, v: &str) -> bool {
+        match self.edition {
+            Edition::Fourth => v == "1.0",
+            Edition::Fifth  => v.strip_prefix("1.")
+                .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())),
         }
     }
 
@@ -440,52 +618,22 @@ impl<'a> Lexer<'a> {
         false
     }
 
-    fn expect_keyword(&mut self, kw: &[u8]) -> Result<()> {
-        if self.try_keyword(kw) {
-            Ok(())
-        } else {
-            Err(XmlError::NotWellFormed {
-                pos: self.pos,
-                reason: format!("expected keyword {:?}", std::str::from_utf8(kw).unwrap_or("?")),
-            })
-        }
-    }
-
-    /// Scan a DOCTYPE declaration per §2.8 [Production 28]. Week 1: capture
-    /// the name and the body bytes between `<!DOCTYPE` and the matching `>`,
-    /// without parsing internal subset / external IDs.
-    fn scan_doctype(&mut self) -> Result<Token<'a>> {
-        debug_assert!(self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE"));
-        self.pos.byte_offset += 9;
-        self.pos.column += 9;
-        self.skip_whitespace();
-        let name = self.scan_name()?;
-        let body_start = self.pos.byte_offset;
-        // Track bracket depth for internal subset
-        let mut depth = 0i32;
-        loop {
-            match self.current() {
-                None => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "DOCTYPE" }),
-                Some(b'[') => { depth += 1; self.bump(); }
-                Some(b']') => { depth -= 1; self.bump(); }
-                Some(b'>') if depth == 0 => {
-                    let body = std::str::from_utf8(&self.src[body_start..self.pos.byte_offset])
-                        .unwrap_or("").trim();
-                    self.bump();
-                    return Ok(Token::Doctype { name, body });
-                }
-                Some(_) => self.bump(),
-            }
-        }
-    }
-
     /// Scan character data per §2.4 [Production 14] until the next `<` or `&`.
     fn scan_text(&mut self) -> Result<Token<'a>> {
         let start = self.pos.byte_offset;
-        while let Some(c) = self.current() {
-            if c == b'<' || c == b'&' { break; }
-            // Per §2.4: `]]>` MUST NOT occur in character data
-            if c == b']' && self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+        // Stop before an invalid character, so the text before it is
+        // handled (and any earlier error reported) first.
+        let stop = match self.first_invalid {
+            Some((offset, _)) if offset >= start => offset,
+            _ => usize::MAX,
+        };
+        while self.skip_until(stop, |b| b == b'<' || b == b'&' || b == b']') == Some(b']') {
+            // Per §2.4: `]]>` MUST NOT occur in character data. Text before
+            // it is returned first, so any earlier error is reported first.
+            if self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+                if self.pos.byte_offset > start {
+                    break;
+                }
                 return Err(XmlError::NotWellFormed {
                     pos: self.pos,
                     reason: "']]>' not allowed in character data".into(),
@@ -495,6 +643,7 @@ impl<'a> Lexer<'a> {
         }
         Ok(Token::Text(self.slice(start)))
     }
+
 
     /// Reference per §4.1 [Productions 66–68]: `&name;` or `&#nnn;` / `&#xhh;`.
     fn scan_reference(&mut self) -> Result<Token<'a>> {
@@ -529,4 +678,11 @@ impl<'a> Lexer<'a> {
             Ok(Token::EntityRef(name))
         }
     }
+}
+
+/// §4.3.3 [Production 81]: EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')*
+fn is_valid_enc_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
