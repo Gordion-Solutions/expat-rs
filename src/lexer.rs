@@ -14,6 +14,10 @@ use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_st
 use crate::error::{Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
+/// Low-level tokeniser: turns a document into [`Token`]s, checking lexical
+/// rules (names, references, the syntax of each construct, §2.2
+/// characters) but not document structure. Most callers want
+/// [`crate::Parser`], which builds on it.
 pub struct Lexer<'a> {
     src: &'a [u8],
     /// The same input as `src`, as text: tokens are sliced from it.
@@ -32,6 +36,7 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
+    /// A lexer over a whole document. A leading byte order mark is skipped.
     pub fn new(src: &'a str) -> Self {
         // §4.3.3 / Appendix F: a leading byte order mark is not part of the
         // document's character data.

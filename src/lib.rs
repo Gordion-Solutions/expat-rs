@@ -122,26 +122,27 @@
 //! non-validating processor is permitted), DTD validation, XML 1.1, and a
 //! libexpat-compatible C API.
 
+#![warn(missing_docs)]
+
 mod chars;
 mod edition4;
+mod encoding;
+mod entities;
+mod error;
+mod event;
 mod expand;
+mod lexer;
 mod namespaces;
-pub mod error;
-pub mod token;
-pub mod lexer;
-pub mod event;
-pub mod parser;
-pub mod stream;
-pub mod entities;
-pub mod encoding;
+mod parser;
+mod stream;
+mod token;
 
 pub use chars::Edition;
-pub use encoding::decode;
-pub use error::{Position, XmlError, Result};
+pub use encoding::{decode, StreamDecoder};
+pub use entities::ExpansionLimits;
+pub use error::{Position, Result, XmlError};
 pub use event::{local_name, Attribute, Event};
 pub use lexer::Lexer;
 pub use parser::Parser;
 pub use stream::StreamParser;
-pub use encoding::StreamDecoder;
 pub use token::{Attr, Token, XmlDecl};
-pub use entities::{EntityTable, ExpansionLimits};

@@ -3,7 +3,7 @@
 //! Modelled after libexpat's `xmlwf`. Reads an XML file from a path argument
 //! and exits 0 if it is well-formed, non-zero otherwise. Errors go to stderr.
 //!
-//! Usage:  xmlwf [--edition 4|5] [--external] [--namespaces] [--canonical] [--chunk N] <path>
+//! Usage: `xmlwf [--edition 4|5] [--external] [--namespaces] [--canonical] [--chunk N] <path>`
 //!
 //! `--edition` selects the XML 1.0 edition whose Name rules apply
 //! (default 5). `--external` reads external parsed entities, resolving
@@ -22,10 +22,24 @@ use expat_rs::{Edition, Event, StreamParser};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    const HELP: &str = "\
+Check that an XML file is well-formed; exit 0 if it is, 1 if not.
+
+options:
+  --edition 4|5   XML 1.0 edition for name rules (default 5)
+  --external      read external parsed entities next to the file
+  --namespaces    enable namespace processing
+  --canonical     write the document in canonical XML form to stdout
+  --chunk N       parse incrementally, N bytes at a time
+  -h, --help      show this help";
     let usage = || {
         eprintln!("usage: {} [--edition 4|5] [--external] [--namespaces] [--canonical] [--chunk N] <xml-file>", args[0]);
         ExitCode::from(2)
     };
+    if args.iter().skip(1).any(|a| a == "-h" || a == "--help") {
+        println!("usage: {} [options] <xml-file>\n\n{HELP}", args[0]);
+        return ExitCode::from(0);
+    }
     let mut edition = Edition::Fifth;
     let mut external = false;
     let mut canonical = false;

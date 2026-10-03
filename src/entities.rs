@@ -39,7 +39,7 @@ impl Default for ExpansionLimits {
     fn default() -> Self {
         Self {
             max_depth: 20,
-            max_expanded_bytes: 1 * 1024 * 1024, // 1 MiB
+            max_expanded_bytes: 1024 * 1024, // 1 MiB
         }
     }
 }
@@ -93,16 +93,18 @@ pub(crate) struct Dtd {
     pub external_subset: bool,
 }
 
+/// Declared general entities, by name.
 #[derive(Default, Debug)]
-pub struct EntityTable {
+pub(crate) struct EntityTable {
     entities: HashMap<String, EntityDef>,
 }
 
 impl EntityTable {
-    pub fn new() -> Self { Self::default() }
+    pub(crate) fn new() -> Self { Self::default() }
 
     /// Declare an internal entity whose literal value is `value`.
-    pub fn declare(&mut self, name: String, value: String) {
+    #[allow(dead_code)]
+    pub(crate) fn declare(&mut self, name: String, value: String) {
         let text = expand_char_refs(&value);
         self.declare_def(name, EntityDef::Internal(text));
     }
@@ -113,7 +115,8 @@ impl EntityTable {
         self.entities.entry(name).or_insert(def);
     }
 
-    pub fn is_declared(&self, name: &str) -> bool {
+    #[allow(dead_code)]
+    pub(crate) fn is_declared(&self, name: &str) -> bool {
         self.entities.contains_key(name)
     }
 

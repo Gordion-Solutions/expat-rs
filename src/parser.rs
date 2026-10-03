@@ -12,7 +12,7 @@
 //! - entity references expand to well-formed content (see `crate::expand`)
 //!
 //! Everything that must survive from one token to the next lives in
-//! [`State`], which borrows nothing from the input. That lets the same
+//! `State`, which borrows nothing from the input. That lets the same
 //! state drive both [`Parser`] (one `&str`) and
 //! [`crate::stream::StreamParser`] (input arriving in chunks).
 
@@ -360,7 +360,11 @@ impl<'l> State<'l> {
     }
 }
 
-/// Pull parser over a whole document held in one `&str`.
+/// Pull parser over a whole document held in one `&str`: call
+/// [`next_event`](Self::next_event) until it returns `Ok(None)`.
+///
+/// Options are set with the `with_*` methods before parsing. For input in
+/// chunks, use [`crate::StreamParser`]; for bytes, [`crate::decode`] first.
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     state: State<'a>,
@@ -370,6 +374,9 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// A parser over `src`, with default options: XML 1.0 Fifth Edition,
+    /// no namespace processing, no external entities, default
+    /// [`ExpansionLimits`].
     pub fn new(src: &'a str) -> Self {
         Self { lexer: Lexer::new(src), state: State::new(), out: VecDeque::new(), done: false }
     }

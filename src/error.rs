@@ -1,15 +1,21 @@
+//! Errors and positions.
+
 use thiserror::Error;
 
 /// Position in the input — line and column are 1-based, byte offset 0-based,
 /// matching libexpat's error reporting convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Position {
+    /// Line number, from 1. Lines end at `\n`.
     pub line: u32,
+    /// Column within the line, from 1, counted in characters.
     pub column: u32,
+    /// Offset in bytes from the start of the (decoded, UTF-8) input.
     pub byte_offset: usize,
 }
 
 impl Position {
+    /// Line 1, column 1, byte 0.
     pub const fn start() -> Self {
         Self { line: 1, column: 1, byte_offset: 0 }
     }
@@ -41,28 +47,56 @@ impl Position {
     }
 }
 
+/// Why a document was rejected. Every variant carries the [`Position`]
+/// where the problem was found; [`XmlError::position`] returns it.
 #[non_exhaustive]
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum XmlError {
-    /// Malformed XML — not well-formed per W3C XML 1.0 §2.1.
+    /// Malformed XML — not well-formed per W3C XML 1.0 (or, with namespace
+    /// processing on, Namespaces in XML 1.0).
     #[error("not well-formed at {pos:?}: {reason}")]
-    NotWellFormed { pos: Position, reason: String },
+    NotWellFormed {
+        /// Where the problem was found.
+        pos: Position,
+        /// What is wrong, in words.
+        reason: String,
+    },
 
     /// Input ended in the middle of a construct.
     #[error("unexpected end of input at {pos:?} (in {context})")]
-    UnexpectedEof { pos: Position, context: &'static str },
+    UnexpectedEof {
+        /// The end of the input.
+        pos: Position,
+        /// The construct that was cut off, e.g. `"Comment"`.
+        context: &'static str,
+    },
 
     /// A character that is not allowed in XML 1.0 (per §2.2 [Production 2]).
     #[error("invalid character {char:?} at {pos:?}")]
-    InvalidChar { pos: Position, char: char },
+    InvalidChar {
+        /// Where the character is.
+        pos: Position,
+        /// The character.
+        char: char,
+    },
 
-    /// Encoding-related error.
+    /// The input's bytes could not be decoded (see [`crate::decode`]).
     #[error("encoding error at {pos:?}: {reason}")]
-    Encoding { pos: Position, reason: String },
+    Encoding {
+        /// Always the start of the input.
+        pos: Position,
+        /// What is wrong, in words.
+        reason: String,
+    },
 
     /// An external entity could not be loaded (the caller's loader failed).
     #[error("cannot load external entity at {pos:?}: {reason}")]
-    ExternalEntity { pos: Position, reason: String },
+    ExternalEntity {
+        /// Where the entity was referenced.
+        pos: Position,
+        /// The entity, its system identifier and the loader's reason.
+        reason: String,
+    },
 }
 
 impl XmlError {
@@ -90,4 +124,5 @@ impl XmlError {
     }
 }
 
+/// `Result` with [`XmlError`] as the error type.
 pub type Result<T> = std::result::Result<T, XmlError>;

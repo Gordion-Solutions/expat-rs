@@ -1,14 +1,16 @@
 [package]
 name = "expat-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.94"
-description = "Memory-safe XML 1.0 parser, libexpat-compatible conformance"
+description = "Memory-safe XML 1.0 parser: streaming, namespaces, hardened against hostile input; aims for libexpat-level conformance"
 license = "MIT"
 repository = "https://github.com/Gordion-Solutions/expat-rs"
+documentation = "https://docs.rs/expat-rs"
 readme = "README.md"
 keywords = ["xml", "parser", "expat", "memory-safety"]
 categories = ["parser-implementations"]
+exclude = [".github/", "bench/"]
 
 [dependencies]
 thiserror = "1.0"

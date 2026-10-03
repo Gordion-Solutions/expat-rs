@@ -36,6 +36,28 @@ use crate::token::Token;
 /// (`<!NOTATION`, `standalone`) is 10 bytes.
 const LOOKAHEAD: usize = 16;
 
+/// Push parser for input that arrives in chunks, like libexpat's
+/// `XML_Parse`: [`feed`](Self::feed) each chunk of bytes (or
+/// [`feed_str`](Self::feed_str) each chunk of text), then
+/// [`finish`](Self::finish).
+///
+/// Events go to the handler as soon as they are complete. They may borrow
+/// the parser's buffer, so they are valid only for the duration of the
+/// call; use `Cow::into_owned` to keep one. Results are the same however
+/// the input is split, except that character data may arrive in more
+/// [`Event::Text`] pieces.
+///
+/// - A construct cut off by the end of a chunk waits for the next one.
+///   An error is reported as soon as it can't be the result of truncation.
+/// - Text at the end of a chunk is delivered up to a point the next chunk
+///   can't change, so long text doesn't accumulate.
+/// - Reparse deferral: an incomplete construct isn't re-scanned until the
+///   buffered input has at least doubled, so a huge construct fed in tiny
+///   chunks costs linear, not quadratic, time (the class of libexpat
+///   CVE-2023-52425).
+/// - Once an error is returned, every later call returns it too.
+///
+/// `'l` is the lifetime of an external-entity loader, if one is set.
 pub struct StreamParser<'l> {
     state: State<'l>,
     decoder: StreamDecoder,
@@ -68,6 +90,7 @@ impl<'l> Default for StreamParser<'l> {
 }
 
 impl<'l> StreamParser<'l> {
+    /// A parser with default options (as [`crate::Parser::new`]).
     pub fn new() -> Self {
         Self {
             state: State::new(),
