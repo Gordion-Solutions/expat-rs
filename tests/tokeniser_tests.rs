@@ -181,11 +181,15 @@ fn full_small_document() {
     assert_eq!(ends, vec!["child", "root"]);
 }
 
-// Per §2.4: `]]>` MUST NOT occur in character data
+// Per §2.4: `]]>` MUST NOT occur in character data. The text before it is
+// returned first (so an earlier error in that text is reported first), and
+// the next token is the error.
 #[test]
 fn cdend_in_text_is_rejected() {
     let mut lex = Lexer::new("oops]]>");
+    assert_eq!(lex.next_token().unwrap(), Some(Token::Text("oops")));
     assert!(lex.next_token().is_err());
+    assert!(Lexer::new("]]>").next_token().is_err());
 }
 
 // Per §3.1: '<' not allowed in attribute value

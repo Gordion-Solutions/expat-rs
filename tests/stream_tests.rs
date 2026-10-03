@@ -108,7 +108,11 @@ fn utf16_input_in_pieces() {
 #[test]
 fn errors_are_reported_the_same() {
     for doc in ["<a><b></a>", "<a>&undeclared;</a>", "<a x='1' x='2'/>", "<a></a><b/>", "<a>\u{1}</a>",
-                "<p:a/>", "<a", "<!DOCTYPE a [<!ENTITY e '&e;'>]><a>&e;</a>"] {
+                "<p:a/>", "<a", "<!DOCTYPE a [<!ENTITY e '&e;'>]><a>&e;</a>",
+                // Found by fuzzing: two errors in one text run outside the
+                // root; both modes must report the earlier one.
+                "<!DOCTYPE d []>\nstray text then a NUL \u{0} later",
+                "\n\n>\r\n!EL]]>dc>"] {
         let want = whole(doc, true).expect_err(doc);
         for cut in 0..=doc.len() {
             let got = streamed(doc.as_bytes(), &[cut], true).expect_err(doc);
@@ -160,4 +164,19 @@ fn error_positions_are_document_positions() {
     assert_eq!((want.position().line, want.position().column), (3, 5));
     let cuts: Vec<usize> = (1..doc.len()).collect();
     assert_eq!(streamed(doc.as_bytes(), &cuts, false).unwrap_err(), want);
+}
+
+#[test]
+fn earliest_error_wins_when_a_text_run_has_two() {
+    // Text outside the root is reported at its first non-whitespace
+    // character, before a later invalid character or ']]>' in the same run.
+    for doc in ["<a/>  junk \u{1}", "<a/>  junk ]]>"] {
+        let e = whole(doc, false).unwrap_err();
+        assert_eq!(e.position().byte_offset, 6, "{doc:?}: {e}");
+    }
+    // Inside the root, text before an invalid character is delivered first.
+    let mut p = Parser::new("<a>ok\u{1}</a>");
+    assert!(matches!(p.next_event().unwrap(), Some(Event::StartElement { .. })));
+    assert!(matches!(p.next_event().unwrap(), Some(Event::Text(t)) if t == "ok"));
+    assert!(matches!(p.next_event(), Err(XmlError::InvalidChar { .. })));
 }
