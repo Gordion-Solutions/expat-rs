@@ -3,6 +3,7 @@
 //! Per W3C XML 1.0 (Fifth Edition) §2.2, §2.3 and §4.1, plus the
 //! Fourth Edition name rules (Appendix B) behind [`Edition::Fourth`].
 
+use crate::error::ErrorKind;
 use crate::edition4::{BASE_CHAR, COMBINING_CHAR, DIGIT, EXTENDER, IDEOGRAPHIC};
 
 /// Which edition of XML 1.0 decides what characters may appear in names.
@@ -131,7 +132,7 @@ pub(crate) fn first_invalid_char(s: &str) -> Option<(usize, char)> {
 /// `body` is the text between `&#` and `;` (so `"x41"` or `"65"`). Returns
 /// the referenced character, or a reason string if the reference is
 /// malformed or names a character outside §2.2 Char (Legal Character WFC).
-pub(crate) fn decode_char_ref(body: &str) -> std::result::Result<char, String> {
+pub(crate) fn decode_char_ref(body: &str) -> std::result::Result<char, (ErrorKind, String)> {
     let (radix, digits) = match body.strip_prefix('x') {
         Some(hex) => (16, hex),
         None      => (10, body),
@@ -142,14 +143,15 @@ pub(crate) fn decode_char_ref(body: &str) -> std::result::Result<char, String> {
         _  => b.is_ascii_digit(),
     });
     if !digits_ok {
-        return Err(format!("malformed character reference '&#{body};'"));
+        return Err((ErrorKind::InvalidToken, format!("malformed character reference '&#{body};'")));
     }
+    let bad = |reason: String| (ErrorKind::BadCharRef, reason);
     let n = u32::from_str_radix(digits, radix)
-        .map_err(|_| format!("character reference '&#{body};' is out of range"))?;
+        .map_err(|_| bad(format!("character reference '&#{body};' is out of range")))?;
     let c = char::from_u32(n)
-        .ok_or_else(|| format!("character reference '&#{body};' = U+{n:04X} is not a Unicode scalar value"))?;
+        .ok_or_else(|| bad(format!("character reference '&#{body};' = U+{n:04X} is not a Unicode scalar value")))?;
     if !is_xml_char(c) {
-        return Err(format!("character reference '&#{body};' = U+{n:04X} is not a legal XML Char (§2.2)"));
+        return Err(bad(format!("character reference '&#{body};' = U+{n:04X} is not a legal XML Char (§2.2)")));
     }
     Ok(c)
 }

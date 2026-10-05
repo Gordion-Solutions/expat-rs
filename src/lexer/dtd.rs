@@ -11,7 +11,7 @@
 
 use super::Lexer;
 use crate::entities::{expand_char_refs, Dtd, DtdDecl, EntityDef};
-use crate::error::{Result, XmlError};
+use crate::error::{ErrorKind, Result, XmlError};
 use crate::event::normalize_newlines;
 use crate::token::Token;
 
@@ -39,7 +39,10 @@ impl<'a> Lexer<'a> {
         }
         if self.current() == Some(b'[') {
             self.bump();
-            self.scan_internal_subset()?;
+            self.in_subset = true;
+            let subset = self.scan_internal_subset();
+            self.in_subset = false;
+            subset?;
             self.bump(); // ]
             self.skip_whitespace();
         }
@@ -90,7 +93,7 @@ impl<'a> Lexer<'a> {
                 let target = self.scan_name()?;
                 // §2.6: targets matching [Xx][Mm][Ll] are reserved.
                 if target.eq_ignore_ascii_case("xml") {
-                    return Err(self.not_wf("processing instruction target 'xml' is reserved"));
+                    return Err(self.not_wf_as(ErrorKind::InvalidToken, "processing instruction target 'xml' is reserved"));
                 }
                 let body = self.scan_pi_body()?;
                 self.dtd.decls.push(DtdDecl::Pi { target: target.to_string(), body: body.to_string() });
@@ -400,7 +403,7 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     return Ok(value);
                 }
-                Some(b'%') => return Err(self.not_wf(
+                Some(b'%') => return Err(self.not_wf_as(ErrorKind::ParamEntityRef,
                     "parameter-entity reference not allowed within a declaration in the internal subset")),
                 Some(b'&') => self.check_reference_syntax()?,
                 Some(_) => self.bump(),
@@ -494,7 +497,8 @@ impl<'a> Lexer<'a> {
                     self.bump();
                     return Ok(value);
                 }
-                Some(c) if !allowed(c) => return Err(self.not_wf(
+                Some(c) if !allowed(c) => return Err(self.not_wf_as(
+                    if context == "public ID literal" { ErrorKind::PublicId } else { ErrorKind::InvalidToken },
                     &format!("character {:?} not allowed in {context}", c as char))),
                 Some(_) => self.bump(),
             }
@@ -503,13 +507,22 @@ impl<'a> Lexer<'a> {
 
     // ─── small helpers ───────────────────────────────────────────────────
 
+    /// Malformed DOCTYPE: a syntax error inside the internal subset, an
+    /// invalid token in the DOCTYPE header (as libexpat classifies them).
     fn not_wf(&self, reason: &str) -> XmlError {
-        XmlError::NotWellFormed { pos: self.pos, reason: reason.into() }
+        let kind = if self.in_subset { ErrorKind::Syntax } else { ErrorKind::InvalidToken };
+        self.not_wf_as(kind, reason)
     }
 
-    /// `UnexpectedEof` at end of input, otherwise `NotWellFormed`.
+    fn not_wf_as(&self, kind: ErrorKind, reason: &str) -> XmlError {
+        XmlError::NotWellFormed { pos: self.pos, kind, reason: reason.into() }
+    }
+
+    /// `UnexpectedEof` at end of input, otherwise `NotWellFormed`. Running
+    /// out of input inside the internal subset leaves it unclosed.
     fn eof_or_not_wf(&self, context: &'static str, reason: &str) -> XmlError {
         if self.is_eof() {
+            let context = if self.in_subset { "DOCTYPE internal subset" } else { context };
             XmlError::UnexpectedEof { pos: self.pos, context }
         } else {
             self.not_wf(reason)

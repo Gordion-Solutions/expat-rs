@@ -23,7 +23,7 @@ use std::borrow::Cow;
 
 use crate::chars::{decode_char_ref, is_name_char, is_name_start_char, Edition};
 use crate::entities::{builtin_entity, AttlistTable, EntityDef, EntityTable, ExpansionLimits};
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::lexer::Lexer;
 use crate::event::{normalize_newlines, Attribute, Event};
 use crate::token::{Attr, Token};
@@ -72,8 +72,8 @@ impl<'e, 'l> Expander<'e, 'l> {
         }
     }
 
-    fn error(&self, reason: String) -> XmlError {
-        XmlError::NotWellFormed { pos: self.pos, reason }
+    fn error(&self, kind: ErrorKind, reason: String) -> XmlError {
+        XmlError::NotWellFormed { pos: self.pos, kind, reason }
     }
 
     /// Event attributes for a start tag of `element`: values normalised
@@ -140,15 +140,15 @@ impl<'e, 'l> Expander<'e, 'l> {
                 None => reason,
             };
             let Some(end) = after.find(';') else {
-                return Err(self.error(in_entity("'&' does not start a reference".into())));
+                return Err(self.error(ErrorKind::InvalidToken, in_entity("'&' does not start a reference".into())));
             };
             let body = &after[..end];
             if let Some(num) = body.strip_prefix('#') {
-                out.push(decode_char_ref(num).map_err(|r| self.error(in_entity(r)))?);
+                out.push(decode_char_ref(num).map_err(|(kind, r)| self.error(kind, in_entity(r)))?);
             } else if is_name(body, self.edition) {
                 self.attr_entity_into(body, out)?;
             } else {
-                return Err(self.error(in_entity(format!("'&{body};' is not a well-formed reference"))));
+                return Err(self.error(ErrorKind::InvalidToken, in_entity(format!("'&{body};' is not a well-formed reference"))));
             }
             rest = &after[end + 1..];
         }
@@ -164,17 +164,17 @@ impl<'e, 'l> Expander<'e, 'l> {
         let text = match self.table.get(name) {
             None => return self.undeclared(name),
             Some(EntityDef::External { unparsed: true, .. }) => {
-                return Err(self.error(format!("reference to unparsed entity {name:?} in attribute value")));
+                return Err(self.error(ErrorKind::BinaryEntityRef, format!("reference to unparsed entity {name:?} in attribute value")));
             }
             Some(EntityDef::External { .. }) => {
-                return Err(self.error(format!(
+                return Err(self.error(ErrorKind::AttributeExternalEntityRef, format!(
                     "reference to external entity {name:?} in attribute value (No External Entity References)")));
             }
             Some(EntityDef::Internal(text)) => text,
         };
         self.enter(name, text.len())?;
         if text.contains('<') {
-            return Err(self.error(format!("entity {name:?} puts '<' in an attribute value")));
+            return Err(self.error(ErrorKind::InvalidToken, format!("entity {name:?} puts '<' in an attribute value")));
         }
         // Replacement text is parsed again (§4.4.5).
         self.normalize_into(text, out, Some(name))?;
@@ -196,7 +196,7 @@ impl<'e, 'l> Expander<'e, 'l> {
                 Ok(())
             }
             Some(EntityDef::External { unparsed: true, .. }) => {
-                Err(self.error(format!("reference to unparsed entity {name:?} in content (Parsed Entity)")))
+                Err(self.error(ErrorKind::BinaryEntityRef, format!("reference to unparsed entity {name:?} in content (Parsed Entity)")))
             }
             Some(EntityDef::External { system_id, public_id, .. }) => {
                 let loaded = match self.loader.as_mut() {
@@ -238,6 +238,7 @@ impl<'e, 'l> Expander<'e, 'l> {
         let pos = self.pos;
         let in_entity = |e: XmlError| XmlError::NotWellFormed {
             pos,
+            kind: e.kind(),
             reason: format!("in replacement text of entity {name:?}: {e}"),
         };
         let mut lexer = Lexer::new(text).with_edition(self.edition);
@@ -259,7 +260,7 @@ impl<'e, 'l> Expander<'e, 'l> {
                 }
                 Token::EndTag(tag) => match open.pop() {
                     Some(start) if start == tag => self.events.push(Event::EndElement(owned(tag))),
-                    _ => return Err(self.error(format!(
+                    _ => return Err(self.error(ErrorKind::AsyncEntity, format!(
                         "end tag </{tag}> in entity {name:?} has no matching start tag in the same entity"))),
                 },
                 Token::EntityRef(inner) => self.check_content_entity(inner)?,
@@ -270,14 +271,14 @@ impl<'e, 'l> Expander<'e, 'l> {
                 Token::ProcessingInstruction { target, body } => {
                     self.events.push(Event::ProcessingInstruction { target: owned(target), body: owned(body) });
                 }
-                Token::XmlDecl(_) => return Err(self.error(format!(
+                Token::XmlDecl(_) => return Err(self.error(ErrorKind::MisplacedXmlPi, format!(
                     "XML or text declaration not allowed in the replacement text of entity {name:?}"))),
-                Token::Doctype { .. } => return Err(self.error(format!(
+                Token::Doctype { .. } => return Err(self.error(ErrorKind::InvalidToken, format!(
                     "DOCTYPE not allowed in the replacement text of entity {name:?}"))),
             }
         }
         if let Some(tag) = open.last() {
-            return Err(self.error(format!("element <{tag}> is not closed within entity {name:?}")));
+            return Err(self.error(ErrorKind::AsyncEntity, format!("element <{tag}> is not closed within entity {name:?}")));
         }
         Ok(())
     }
@@ -292,7 +293,7 @@ impl<'e, 'l> Expander<'e, 'l> {
 
     fn undeclared(&self, name: &str) -> Result<()> {
         if self.entity_declared_wfc {
-            Err(self.error(format!("undeclared entity {name:?}")))
+            Err(self.error(ErrorKind::UndefinedEntity, format!("undeclared entity {name:?}")))
         } else {
             Ok(()) // a validity error only (VC Entity Declared)
         }
@@ -302,16 +303,16 @@ impl<'e, 'l> Expander<'e, 'l> {
     /// depth and byte limits.
     fn enter(&mut self, name: &str, len: usize) -> Result<()> {
         if self.stack.iter().any(|n| n == name) {
-            return Err(self.error(format!("entity {name:?} refers to itself (No Recursion)")));
+            return Err(self.error(ErrorKind::RecursiveEntityRef, format!("entity {name:?} refers to itself (No Recursion)")));
         }
         if self.stack.len() >= self.limits.max_depth {
-            return Err(self.error(format!(
+            return Err(self.error(ErrorKind::AmplificationLimitBreach, format!(
                 "entity expansion of {name:?} exceeded the maximum nesting depth — \
                  possible billion-laughs / quadratic-blowup payload")));
         }
         self.expanded = self.expanded.saturating_add(len);
         if self.expanded > self.limits.max_expanded_bytes {
-            return Err(self.error(format!(
+            return Err(self.error(ErrorKind::AmplificationLimitBreach, format!(
                 "entity expansion exceeded {} bytes — possible billion-laughs / \
                  quadratic-blowup payload", self.limits.max_expanded_bytes)));
         }
