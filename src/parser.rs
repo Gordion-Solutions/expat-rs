@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityTable, ExpansionLimits};
+use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
 
@@ -225,13 +225,32 @@ impl<'l> State<'l> {
                         system_id: system_id.map(Cow::Owned),
                     }, out)?;
                 }
+                DtdDecl::Element { name, model } => {
+                    self.emit(Event::ElementDecl { name: Cow::Owned(name), model }, out)?;
+                }
                 _ if after_unread_pe => {}
                 DtdDecl::Entity { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
                     return Err(self.not_wf(ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon (Namespaces §7)")));
                 }
-                DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
-                DtdDecl::Entity { parameter: true, .. } => {}
-                DtdDecl::AttDef { element, name, cdata, default, pos } => {
+                DtdDecl::Entity { name, parameter, def } => {
+                    let event = match &def {
+                        EntityDef::Internal(text) => Event::EntityDecl {
+                            name: Cow::Owned(name.clone()), parameter, value: Some(Cow::Owned(text.clone())),
+                            system_id: None, public_id: None, notation: None,
+                        },
+                        EntityDef::External { system_id, public_id, notation, .. } => Event::EntityDecl {
+                            name: Cow::Owned(name.clone()), parameter, value: None,
+                            system_id: Some(Cow::Owned(system_id.clone())),
+                            public_id: public_id.clone().map(Cow::Owned),
+                            notation: notation.clone().map(Cow::Owned),
+                        },
+                    };
+                    if !parameter {
+                        self.entities.declare_def(name, def);
+                    }
+                    self.emit(event, out)?;
+                }
+                DtdDecl::AttDef { element, name, att_type, required, cdata, default, pos } => {
                     // Defaults are normalised, and their references checked,
                     // at the point of declaration (Entity Declared requires
                     // declaration before use here).
@@ -243,6 +262,13 @@ impl<'l> State<'l> {
                         }
                         None => None,
                     };
+                    self.emit(Event::AttlistDecl {
+                        element: Cow::Owned(element.clone()),
+                        attribute: Cow::Owned(name.clone()),
+                        att_type: Cow::Owned(att_type),
+                        default: default.clone().map(Cow::Owned),
+                        required,
+                    }, out)?;
                     self.attlists.declare(element, AttDecl { name, cdata, default });
                 }
             }
@@ -291,7 +317,7 @@ impl<'l> State<'l> {
                 self.standalone = d.standalone;
                 self.emit(Event::XmlDecl(d), out)
             }
-            Token::Doctype { name, body } => {
+            Token::Doctype { name, body, system_id, public_id, has_internal_subset } => {
                 if self.saw_doctype {
                     return Err(self.not_wf(ErrorKind::Syntax, "duplicate DOCTYPE declaration"));
                 }
@@ -299,7 +325,13 @@ impl<'l> State<'l> {
                     return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "DOCTYPE must appear before the root element"));
                 }
                 self.saw_doctype = true;
-                self.emit(Event::Doctype { name, body }, out)?;
+                self.emit(Event::Doctype {
+                    name,
+                    body,
+                    system_id: system_id.map(Cow::Borrowed),
+                    public_id: public_id.map(Cow::Borrowed),
+                    has_internal_subset,
+                }, out)?;
                 self.process_dtd(dtd, out)
             }
             Token::StartTag { name, attributes } => {
