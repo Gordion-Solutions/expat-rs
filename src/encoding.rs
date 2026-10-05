@@ -9,10 +9,10 @@
 
 use std::borrow::Cow;
 
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 
-fn error(reason: String) -> XmlError {
-    XmlError::Encoding { pos: Position::start(), reason }
+fn error(kind: ErrorKind, reason: String) -> XmlError {
+    XmlError::Encoding { pos: Position::start(), kind, reason }
 }
 
 /// Decode an XML document or external parsed entity to text.
@@ -28,19 +28,19 @@ pub fn decode(bytes: &[u8]) -> Result<Cow<'_, str>> {
         // No byte order mark, but '<?' in UTF-16 (Appendix F).
         [0x00, 0x3C, 0x00, 0x3F, ..] => decode_utf16(bytes, u16::from_be_bytes),
         [0x3C, 0x00, 0x3F, 0x00, ..] => decode_utf16(bytes, u16::from_le_bytes),
-        [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => Err(error("UCS-4 input is not supported".into())),
+        [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => Err(error(ErrorKind::UnknownEncoding, "UCS-4 input is not supported".into())),
         _ => decode_8bit(bytes),
     }
 }
 
 fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<Cow<'_, str>> {
     if !bytes.len().is_multiple_of(2) {
-        return Err(error("UTF-16 input has an odd number of bytes".into()));
+        return Err(error(ErrorKind::PartialChar, "UTF-16 input has an odd number of bytes".into()));
     }
     let units = bytes.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
     let text: String = char::decode_utf16(units)
         .collect::<std::result::Result<_, _>>()
-        .map_err(|e| error(format!("invalid UTF-16: {e}")))?;
+        .map_err(|e| error(ErrorKind::InvalidToken, format!("invalid UTF-16: {e}")))?;
     check_utf16_declaration(&text)?;
     Ok(Cow::Owned(text))
 }
@@ -48,7 +48,7 @@ fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<Cow<'_, str>> 
 /// UTF-16 text must not declare an 8-bit encoding (§4.3.3).
 fn check_utf16_declaration(text: &str) -> Result<()> {
     match declared_encoding(text) {
-        Some(enc) if !is_utf16(enc) => Err(error(format!("document is UTF-16 but declares encoding {enc:?}"))),
+        Some(enc) if !is_utf16(enc) => Err(error(ErrorKind::IncorrectEncoding, format!("document is UTF-16 but declares encoding {enc:?}"))),
         _ => Ok(()),
     }
 }
@@ -67,20 +67,24 @@ fn choose_8bit(bytes: &[u8]) -> Result<Kind8> {
     let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     // The declaration itself is ASCII in every supported 8-bit encoding.
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]);
-    let declared = declared_encoding(head.trim_start_matches('\u{FEFF}')).map(str::to_ascii_uppercase);
+    // A name that isn't a valid EncName (§4.3.3 [81]) is a malformed
+    // declaration, for the lexer to report; decode as UTF-8 meanwhile.
+    let declared = declared_encoding(head.trim_start_matches('\u{FEFF}'))
+        .filter(|name| is_enc_name(name))
+        .map(str::to_ascii_uppercase);
     match declared.as_deref() {
         None | Some("UTF-8") => Ok(Kind8::Utf8),
-        Some(enc) if has_bom => Err(error(format!("document has a UTF-8 byte order mark but declares encoding {enc:?}"))),
-        Some(enc) if is_utf16(enc) => Err(error("UTF-16 documents must begin with a byte order mark".into())),
+        Some(enc) if has_bom => Err(error(ErrorKind::IncorrectEncoding, format!("document has a UTF-8 byte order mark but declares encoding {enc:?}"))),
+        Some(enc) if is_utf16(enc) => Err(error(ErrorKind::IncorrectEncoding, "UTF-16 documents must begin with a byte order mark".into())),
         Some("US-ASCII" | "ASCII") => Ok(Kind8::Ascii),
         Some("ISO-8859-1" | "ISO_8859-1" | "LATIN1") => Ok(Kind8::Latin1),
-        Some(enc) => Err(error(format!("unsupported encoding {enc:?}"))),
+        Some(enc) => Err(error(ErrorKind::UnknownEncoding, format!("unsupported encoding {enc:?}"))),
     }
 }
 
 fn check_ascii(bytes: &[u8], offset: usize) -> Result<()> {
     match bytes.iter().position(|&b| b >= 0x80) {
-        Some(i) => Err(error(format!("byte {:#04x} at offset {} is not US-ASCII", bytes[i], offset + i))),
+        Some(i) => Err(error(ErrorKind::InvalidToken, format!("byte {:#04x} at offset {} is not US-ASCII", bytes[i], offset + i))),
         None => Ok(()),
     }
 }
@@ -99,7 +103,18 @@ fn decode_8bit(bytes: &[u8]) -> Result<Cow<'_, str>> {
 fn utf8(bytes: &[u8]) -> Result<Cow<'_, str>> {
     std::str::from_utf8(bytes)
         .map(Cow::Borrowed)
-        .map_err(|e| error(format!("invalid UTF-8 at offset {}", e.valid_up_to())))
+        .map_err(|e| {
+            // No error length: the input just stops mid-character.
+            let kind = if e.error_len().is_none() { ErrorKind::PartialChar } else { ErrorKind::InvalidToken };
+            error(kind, format!("invalid UTF-8 at offset {}", e.valid_up_to()))
+        })
+}
+
+/// §4.3.3 [Production 81]: EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')*
+fn is_enc_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 fn is_utf16(enc: &str) -> bool {
@@ -171,7 +186,7 @@ impl StreamDecoder {
                 let valid = match std::str::from_utf8(&self.pending) {
                     Ok(s) => s.len(),
                     Err(e) if e.error_len().is_some() => {
-                        return Err(error(format!("invalid UTF-8 at offset {}", self.offset + e.valid_up_to())));
+                        return Err(error(ErrorKind::InvalidToken, format!("invalid UTF-8 at offset {}", self.offset + e.valid_up_to())));
                     }
                     Err(e) => e.valid_up_to(), // a character continues in the next chunk
                 };
@@ -189,7 +204,7 @@ impl StreamDecoder {
                 }
                 let units = self.pending[..n].as_chunks::<2>().0.iter().map(|&pair| unit(pair));
                 for c in char::decode_utf16(units) {
-                    out.push(c.map_err(|e| error(format!("invalid UTF-16: {e}")))?);
+                    out.push(c.map_err(|e| error(ErrorKind::InvalidToken, format!("invalid UTF-16: {e}")))?);
                 }
                 n
             }
@@ -197,7 +212,7 @@ impl StreamDecoder {
         self.pending.drain(..used);
         self.offset += used;
         if last && !self.pending.is_empty() {
-            return Err(error("input ends in the middle of a character".into()));
+            return Err(error(ErrorKind::PartialChar, "input ends in the middle of a character".into()));
         }
         if let Some(head) = &mut self.utf16_head {
             head.push_str(&out[start..]);
@@ -223,7 +238,7 @@ impl StreamDecoder {
             _ if p.len() < 4 && !last => return Ok(None),
             [0x00, 0x3C, 0x00, 0x3F, ..] => utf16(true),
             [0x3C, 0x00, 0x3F, 0x00, ..] => utf16(false),
-            [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => return Err(error("UCS-4 input is not supported".into())),
+            [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => return Err(error(ErrorKind::UnknownEncoding, "UCS-4 input is not supported".into())),
             _ => {
                 let body = p.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(p);
                 let has_decl = body.starts_with(b"<?xml");

@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::chars::{is_name_char, is_name_start_char, Edition};
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Attribute, Event, Span};
 
 pub(crate) const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
@@ -42,8 +42,8 @@ pub(crate) struct Namespaces {
     pub edition: Edition,
 }
 
-fn error(pos: Position, reason: String) -> XmlError {
-    XmlError::NotWellFormed { pos, reason }
+fn error(pos: Position, kind: ErrorKind, reason: String) -> XmlError {
+    XmlError::NotWellFormed { pos, kind, reason }
 }
 
 impl Namespaces {
@@ -72,7 +72,7 @@ impl Namespaces {
         match name.split_once(':') {
             None if ncname(name) => Ok(None),
             Some((prefix, local)) if ncname(prefix) && ncname(local) => Ok(Some(prefix)),
-            _ => Err(error(pos, format!("{what} name {name:?} is not a valid QName"))),
+            _ => Err(error(pos, ErrorKind::InvalidToken, format!("{what} name {name:?} is not a valid QName"))),
         }
     }
 
@@ -100,13 +100,13 @@ impl Namespaces {
                 Ok(())
             }
             Event::ProcessingInstruction { ref target, .. } if target.contains(':') => {
-                Err(error(pos, format!("processing instruction target {target:?} contains a colon")))
+                Err(error(pos, ErrorKind::InvalidToken, format!("processing instruction target {target:?} contains a colon")))
             }
             Event::NotationDecl { ref name, .. } if name.contains(':') => {
-                Err(error(pos, format!("notation name {name:?} contains a colon")))
+                Err(error(pos, ErrorKind::InvalidToken, format!("notation name {name:?} contains a colon")))
             }
             Event::SkippedEntity(ref name) if name.contains(':') => {
-                Err(error(pos, format!("entity name {name:?} contains a colon")))
+                Err(error(pos, ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon")))
             }
             other => {
                 out.push_back((other, span));
@@ -137,19 +137,19 @@ impl Namespaces {
             };
             let uri = a.value.as_ref();
             match prefix.as_deref() {
-                Some("xmlns") => return Err(error(pos, "the prefix 'xmlns' must not be declared".into())),
+                Some("xmlns") => return Err(error(pos, ErrorKind::ReservedPrefixXmlns, "the prefix 'xmlns' must not be declared".into())),
                 Some("xml") if uri != XML_NS => {
-                    return Err(error(pos, format!("the prefix 'xml' can only be bound to {XML_NS}")));
+                    return Err(error(pos, ErrorKind::ReservedPrefixXml, format!("the prefix 'xml' can only be bound to {XML_NS}")));
                 }
                 Some(p) if uri.is_empty() => {
-                    return Err(error(pos, format!(
+                    return Err(error(pos, ErrorKind::UndeclaringPrefix, format!(
                         "prefix {p:?} cannot be undeclared in Namespaces 1.0 (xmlns:{p}=\"\")")));
                 }
                 p if uri == XML_NS && p != Some("xml") => {
-                    return Err(error(pos, format!("{XML_NS} can only be bound to the prefix 'xml'")));
+                    return Err(error(pos, ErrorKind::ReservedNamespaceUri, format!("{XML_NS} can only be bound to the prefix 'xml'")));
                 }
                 _ if uri == XMLNS_NS => {
-                    return Err(error(pos, format!("{XMLNS_NS} must not be declared")));
+                    return Err(error(pos, ErrorKind::ReservedNamespaceUri, format!("{XMLNS_NS} must not be declared")));
                 }
                 _ => {}
             }
@@ -171,7 +171,7 @@ impl Namespaces {
         let prefix = self.check_qname(&name, "element", pos)?;
         let namespace = match prefix {
             Some(p) => Some(self.lookup(Some(p))
-                .ok_or_else(|| error(pos, format!("element prefix {p:?} is not declared")))?),
+                .ok_or_else(|| error(pos, ErrorKind::UnboundPrefix, format!("element prefix {p:?} is not declared")))?),
             None => self.lookup(None),
         }
         .map(|uri| Cow::Owned(uri.to_string()));
@@ -181,7 +181,7 @@ impl Namespaces {
         for a in attributes.iter_mut() {
             if let Some(p) = self.check_qname(&a.name, "attribute", pos)? {
                 let uri = self.lookup(Some(p))
-                    .ok_or_else(|| error(pos, format!("attribute prefix {p:?} is not declared")))?;
+                    .ok_or_else(|| error(pos, ErrorKind::UnboundPrefix, format!("attribute prefix {p:?} is not declared")))?;
                 a.namespace = Some(Cow::Owned(uri.to_string()));
             }
             // §6.3 Attributes Unique: same local name and namespace name.
@@ -189,7 +189,7 @@ impl Namespaces {
             // checked for duplicate names.)
             if let Some(ns) = &a.namespace {
                 if !expanded_names.insert((ns.to_string(), a.local_name().to_string())) {
-                    return Err(error(pos, format!(
+                    return Err(error(pos, ErrorKind::DuplicateAttribute, format!(
                         "attribute {:?} duplicates another attribute's local name and namespace", a.name)));
                 }
             }

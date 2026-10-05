@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 
 use crate::chars::Edition;
 use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityTable, ExpansionLimits};
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
 
 /// Events produced while handling a token, each with its span.
@@ -139,8 +139,16 @@ impl<'l> State<'l> {
         self.namespaces = Some(Namespaces::new(self.edition));
     }
 
-    fn not_wf(&self, reason: impl Into<String>) -> XmlError {
-        XmlError::NotWellFormed { pos: self.last_pos, reason: reason.into() }
+    fn not_wf(&self, kind: ErrorKind, reason: impl Into<String>) -> XmlError {
+        XmlError::NotWellFormed { pos: self.last_pos, kind, reason: reason.into() }
+    }
+
+    /// Content where only whitespace, comments and PIs may appear: junk
+    /// after the root element, an invalid token before it (as libexpat
+    /// classifies them).
+    fn outside_root(&self, reason: &str) -> XmlError {
+        let kind = if self.phase == Phase::Epilog { ErrorKind::JunkAfterDocElement } else { ErrorKind::InvalidToken };
+        self.not_wf(kind, reason)
     }
 
     fn expander(&mut self) -> Expander<'_, 'l> {
@@ -170,7 +178,7 @@ impl<'l> State<'l> {
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.expanded_bytes_total = self.expanded_bytes_total.saturating_add(bytes);
         if self.expanded_bytes_total > self.expansion_limits.max_expanded_bytes {
-            return Err(self.not_wf(format!(
+            return Err(self.not_wf(ErrorKind::AmplificationLimitBreach, format!(
                 "cumulative entity expansion exceeded {} bytes — \
                  possible quadratic-blowup payload",
                 self.expansion_limits.max_expanded_bytes)));
@@ -219,7 +227,7 @@ impl<'l> State<'l> {
                 }
                 _ if after_unread_pe => {}
                 DtdDecl::Entity { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
-                    return Err(self.not_wf(format!("entity name {name:?} contains a colon (Namespaces §7)")));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon (Namespaces §7)")));
                 }
                 DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
                 DtdDecl::Entity { parameter: true, .. } => {}
@@ -246,17 +254,17 @@ impl<'l> State<'l> {
     /// End of input: everything opened must have closed.
     pub fn finish(&self) -> Result<()> {
         if let Some(open) = self.stack.top() {
-            return Err(self.not_wf(format!("unclosed element {open:?}")));
+            return Err(self.not_wf(ErrorKind::NoElements, format!("unclosed element {open:?}")));
         }
         if self.phase == Phase::Prolog {
-            return Err(self.not_wf("no root element"));
+            return Err(self.not_wf(ErrorKind::NoElements, "no root element"));
         }
         Ok(())
     }
 
     fn start_element_allowed(&self) -> Result<()> {
         if self.phase == Phase::Epilog {
-            return Err(self.not_wf("second root element not allowed"));
+            return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "second root element not allowed"));
         }
         Ok(())
     }
@@ -274,10 +282,10 @@ impl<'l> State<'l> {
         match tok {
             Token::XmlDecl(d) => {
                 if self.saw_xmldecl {
-                    return Err(self.not_wf("duplicate XML declaration"));
+                    return Err(self.not_wf(ErrorKind::MisplacedXmlPi, "duplicate XML declaration"));
                 }
                 if self.phase != Phase::Prolog || self.saw_doctype || !self.stack.is_empty() {
-                    return Err(self.not_wf("XML declaration must be the first thing in the document"));
+                    return Err(self.not_wf(ErrorKind::MisplacedXmlPi, "XML declaration must be the first thing in the document"));
                 }
                 self.saw_xmldecl = true;
                 self.standalone = d.standalone;
@@ -285,10 +293,10 @@ impl<'l> State<'l> {
             }
             Token::Doctype { name, body } => {
                 if self.saw_doctype {
-                    return Err(self.not_wf("duplicate DOCTYPE declaration"));
+                    return Err(self.not_wf(ErrorKind::Syntax, "duplicate DOCTYPE declaration"));
                 }
                 if self.phase != Phase::Prolog {
-                    return Err(self.not_wf("DOCTYPE must appear before the root element"));
+                    return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "DOCTYPE must appear before the root element"));
                 }
                 self.saw_doctype = true;
                 self.emit(Event::Doctype { name, body }, out)?;
@@ -312,9 +320,9 @@ impl<'l> State<'l> {
             }
             Token::EndTag(name) => {
                 match self.stack.top() {
-                    None => return Err(self.not_wf(format!("unexpected end tag </{name}> with no matching start"))),
+                    None => return Err(self.outside_root(&format!("unexpected end tag </{name}> with no matching start"))),
                     Some(top) if top != name => {
-                        return Err(self.not_wf(format!("end tag </{name}> does not match start tag <{top}>")));
+                        return Err(self.not_wf(ErrorKind::TagMismatch, format!("end tag </{name}> does not match start tag <{top}>")));
                     }
                     Some(_) => {}
                 }
@@ -327,7 +335,7 @@ impl<'l> State<'l> {
                     if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
                         // Report the first character that isn't whitespace.
                         self.last_pos = self.last_pos.advance(&s[..i]);
-                        return Err(self.not_wf("non-whitespace text outside the root element"));
+                        return Err(self.outside_root("non-whitespace text outside the root element"));
                     }
                     // Whitespace in the prolog/epilog is silently absorbed.
                     return Ok(());
@@ -336,7 +344,7 @@ impl<'l> State<'l> {
             }
             Token::CData(s) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("CDATA section outside the root element"));
+                    return Err(self.outside_root("CDATA section outside the root element"));
                 }
                 self.emit(Event::CData(normalize_newlines(s)), out)
             }
@@ -349,7 +357,7 @@ impl<'l> State<'l> {
             // quadratic-blowup, and its events delivered in place.
             Token::EntityRef(name) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("entity reference outside the root element"));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, "entity reference outside the root element"));
                 }
                 if let Some(text) = crate::entities::builtin_entity(name) {
                     return self.emit(Event::Text(Cow::Borrowed(text)), out);
@@ -362,7 +370,7 @@ impl<'l> State<'l> {
             }
             Token::CharRef(c) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("character reference outside the root element"));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, "character reference outside the root element"));
                 }
                 self.emit(Event::Text(Cow::Owned(c.to_string())), out)
             }
@@ -472,7 +480,11 @@ impl<'a> Parser<'a> {
 /// same name. Hash-based above a handful of attributes, so an element with
 /// very many attributes costs linear, not quadratic, time.
 pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
-    let duplicate = |name: &str| XmlError::NotWellFormed { pos, reason: format!("duplicate attribute {name:?}") };
+    let duplicate = |name: &str| XmlError::NotWellFormed {
+        pos,
+        kind: ErrorKind::DuplicateAttribute,
+        reason: format!("duplicate attribute {name:?}"),
+    };
     if attrs.len() <= 8 {
         for (i, a) in attrs.iter().enumerate() {
             if attrs[..i].iter().any(|b| b.name == a.name) {

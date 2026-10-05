@@ -11,7 +11,7 @@ mod dtd;
 
 use crate::entities::Dtd;
 use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
 /// Low-level tokeniser: turns a document into [`Token`]s, checking lexical
@@ -33,6 +33,9 @@ pub struct Lexer<'a> {
     doc_start: usize,
     /// Declarations recorded while tokenising the DOCTYPE (see `dtd.rs`).
     dtd: Dtd,
+    /// Inside the DOCTYPE's internal subset (errors there are DTD syntax
+    /// errors, as libexpat classifies them).
+    in_subset: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -49,6 +52,7 @@ impl<'a> Lexer<'a> {
             edition: Edition::default(),
             doc_start,
             dtd: Dtd::default(),
+            in_subset: false,
         }
     }
 
@@ -64,6 +68,18 @@ impl<'a> Lexer<'a> {
             edition: Edition::default(),
             doc_start: usize::MAX,
             dtd: Dtd::default(),
+            in_subset: false,
+        }
+    }
+
+    /// A malformed-markup error at the current position, or, when the input
+    /// has run out, an unclosed-token error: what's malformed may just be
+    /// cut off.
+    fn syntax_error(&self, reason: &str) -> XmlError {
+        if self.is_eof() {
+            XmlError::UnexpectedEof { pos: self.pos, context: "markup" }
+        } else {
+            XmlError::NotWellFormed { kind: ErrorKind::InvalidToken, pos: self.pos, reason: reason.into() }
         }
     }
 
@@ -91,7 +107,7 @@ impl<'a> Lexer<'a> {
         if !is_decl {
             return Ok(());
         }
-        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { pos, reason: reason.into() };
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { kind: ErrorKind::TextDecl, pos, reason: reason.into() };
         self.pos.byte_offset += 5;
         self.pos.column += 5;
         self.skip_whitespace();
@@ -260,7 +276,11 @@ impl<'a> Lexer<'a> {
         let start = self.pos.byte_offset;
         match self.current_char() {
             Some((c, len)) if is_name_start_char(c, self.edition) => self.bump_char(len),
-            Some((c, _))   => return Err(XmlError::InvalidChar { pos: self.pos, char: c }),
+            Some((c, _))   => return Err(XmlError::NotWellFormed {
+                kind: ErrorKind::InvalidToken,
+                pos: self.pos,
+                reason: format!("expected a name, found {c:?}"),
+            }),
             None           => return Err(XmlError::UnexpectedEof { pos: self.pos, context: "Name" }),
         }
         while let Some((c, len)) = self.current_char() {
@@ -276,7 +296,7 @@ impl<'a> Lexer<'a> {
     fn scan_attr_value(&mut self) -> Result<&'a str> {
         let quote = match self.current() {
             Some(q @ (b'"' | b'\'')) => q,
-            Some(c) => return Err(XmlError::NotWellFormed {
+            Some(c) => return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                 pos: self.pos,
                 reason: format!("expected quote to start attribute value, got {:?}", c as char),
             }),
@@ -286,7 +306,7 @@ impl<'a> Lexer<'a> {
         let start = self.pos.byte_offset;
         loop {
             match self.skip_until(usize::MAX, |b| b == quote || b == b'<' || b == b'&') {
-                Some(b'<') => return Err(XmlError::NotWellFormed {
+                Some(b'<') => return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                     pos: self.pos, reason: "'<' not allowed in attribute value".into(),
                 }),
                 // A literal '&' must begin a well-formed Reference.
@@ -318,7 +338,7 @@ impl<'a> Lexer<'a> {
                 // within comments." If we see -- followed by anything other
                 // than > we error.
                 if self.peek(2) != Some(b'>') {
-                    return Err(XmlError::NotWellFormed {
+                    return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                         pos: self.pos,
                         reason: "'--' not allowed within a comment".into(),
                     });
@@ -356,10 +376,7 @@ impl<'a> Lexer<'a> {
         // so the target is followed by either '?>' or whitespace.
         let at_close = self.current() == Some(b'?') && self.peek(1) == Some(b'>');
         if !at_close && !self.skip_whitespace() {
-            return Err(XmlError::NotWellFormed {
-                pos: self.pos,
-                reason: "expected whitespace or '?>' after processing instruction target".into(),
-            });
+            return Err(self.syntax_error("expected whitespace or '?>' after processing instruction target"));
         }
         let start = self.pos.byte_offset;
         loop {
@@ -420,9 +437,7 @@ impl<'a> Lexer<'a> {
                 let name = self.scan_name()?;
                 self.skip_whitespace();
                 if self.current() != Some(b'>') {
-                    return Err(XmlError::NotWellFormed {
-                        pos: self.pos, reason: "expected '>' to close end tag".into(),
-                    });
+                    return Err(self.syntax_error("expected '>' to close end tag"));
                 }
                 self.bump();
                 Ok(Token::EndTag(name))
@@ -440,7 +455,7 @@ impl<'a> Lexer<'a> {
                 } else if self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE") {
                     self.scan_doctype()
                 } else {
-                    Err(XmlError::NotWellFormed {
+                    Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                         pos: self.pos, reason: "unrecognised <! construct".into(),
                     })
                 }
@@ -455,6 +470,7 @@ impl<'a> Lexer<'a> {
                     self.scan_xmldecl_after_target()
                 } else if target.eq_ignore_ascii_case("xml") {
                     Err(XmlError::NotWellFormed {
+                        kind: if target == "xml" { ErrorKind::MisplacedXmlPi } else { ErrorKind::InvalidToken },
                         pos: self.pos,
                         reason: if target == "xml" {
                             "XML declaration allowed only at the start of the document".into()
@@ -488,33 +504,27 @@ impl<'a> Lexer<'a> {
                 Some(b'/') => {
                     self.bump();
                     if self.current() != Some(b'>') {
-                        return Err(XmlError::NotWellFormed {
-                            pos: self.pos, reason: "expected '>' after '/'".into(),
-                        });
+                        return Err(self.syntax_error("expected '>' after '/'"));
                     }
                     self.bump();
                     return Ok(Token::EmptyTag { name, attributes });
                 }
                 Some(_) if self.current_char().is_some_and(|(c, _)| is_name_start_char(c, self.edition)) => {
                     if !had_space {
-                        return Err(XmlError::NotWellFormed {
-                            pos: self.pos, reason: "whitespace required before attribute".into(),
-                        });
+                        return Err(self.syntax_error("whitespace required before attribute"));
                     }
                     let attr_pos = self.pos;
                     let aname = self.scan_name()?;
                     self.skip_whitespace();
                     if self.current() != Some(b'=') {
-                        return Err(XmlError::NotWellFormed {
-                            pos: self.pos, reason: "expected '=' after attribute name".into(),
-                        });
+                        return Err(self.syntax_error("expected '=' after attribute name"));
                     }
                     self.bump();
                     self.skip_whitespace();
                     let value = self.scan_attr_value()?;
                     attributes.push(Attr { name: aname, value, pos: attr_pos });
                 }
-                Some(c) => return Err(XmlError::NotWellFormed {
+                Some(c) => return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                     pos: self.pos,
                     reason: format!("unexpected {:?} in start tag", c as char),
                 }),
@@ -536,7 +546,7 @@ impl<'a> Lexer<'a> {
     /// The three pseudo-attributes are each preceded by required S and must
     /// appear in this order.
     fn scan_xmldecl_after_target(&mut self) -> Result<Token<'a>> {
-        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { pos, reason: reason.into() };
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { kind: ErrorKind::XmlDecl, pos, reason: reason.into() };
 
         if !self.skip_whitespace() || !self.try_keyword(b"version") {
             return Err(not_wf(self.pos, "XML declaration must start with version"));
@@ -588,7 +598,7 @@ impl<'a> Lexer<'a> {
     fn scan_eq(&mut self) -> Result<()> {
         self.skip_whitespace();
         if self.current() != Some(b'=') {
-            return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected '='".into() });
+            return Err(self.syntax_error("expected '='"));
         }
         self.bump();
         self.skip_whitespace();
@@ -634,7 +644,7 @@ impl<'a> Lexer<'a> {
                 if self.pos.byte_offset > start {
                     break;
                 }
-                return Err(XmlError::NotWellFormed {
+                return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                     pos: self.pos,
                     reason: "']]>' not allowed in character data".into(),
                 });
@@ -655,7 +665,7 @@ impl<'a> Lexer<'a> {
             while let Some(c) = self.current() {
                 if c == b';' { break; }
                 if !(c.is_ascii_alphanumeric()) {
-                    return Err(XmlError::NotWellFormed {
+                    return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                         pos: self.pos,
                         reason: format!("invalid character {:?} in numeric character reference", c as char),
                     });
@@ -663,16 +673,16 @@ impl<'a> Lexer<'a> {
                 self.bump();
             }
             if self.current() != Some(b';') {
-                return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected ';' to close character reference".into() });
+                return Err(self.syntax_error("expected ';' to close character reference"));
             }
             let body = self.slice(body_start);
-            let c = decode_char_ref(body).map_err(|reason| XmlError::NotWellFormed { pos: self.pos, reason })?;
+            let c = decode_char_ref(body).map_err(|(kind, reason)| XmlError::NotWellFormed { kind, pos: self.pos, reason })?;
             self.bump();
             Ok(Token::CharRef(c))
         } else {
             let name = self.scan_name()?;
             if self.current() != Some(b';') {
-                return Err(XmlError::NotWellFormed { pos: self.pos, reason: "expected ';' to close entity reference".into() });
+                return Err(self.syntax_error("expected ';' to close entity reference"));
             }
             self.bump();
             Ok(Token::EntityRef(name))

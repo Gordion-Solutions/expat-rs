@@ -25,7 +25,7 @@ use std::collections::VecDeque;
 use crate::chars::Edition;
 use crate::encoding::StreamDecoder;
 use crate::entities::{Dtd, ExpansionLimits};
-use crate::error::{Position, Result, XmlError};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Event, Located, Span};
 use crate::lexer::Lexer;
 use crate::parser::State;
@@ -186,11 +186,12 @@ impl<'l> StreamParser<'l> {
             return Err(e.clone());
         }
         if self.finished {
-            return Err(XmlError::NotWellFormed { pos: self.base, reason: "input after finish()".into() });
+            return Err(XmlError::NotWellFormed { pos: self.base, kind: ErrorKind::Finished, reason: "input after finish()".into() });
         }
         if *self.input.get_or_insert(input) != input {
             return Err(XmlError::NotWellFormed {
                 pos: self.base,
+                kind: ErrorKind::InvalidArgument,
                 reason: "feed() and feed_str() can't be mixed in one document".into(),
             });
         }
