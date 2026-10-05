@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 
 use crate::chars::Edition;
 use crate::encoding::StreamDecoder;
-use crate::entities::{Dtd, ExpansionLimits};
+use crate::entities::{AmplificationLimits, Dtd, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Event, Located, Span};
 use crate::lexer::Lexer;
@@ -150,6 +150,17 @@ impl<'l> StreamParser<'l> {
         self.deferral
     }
 
+    /// See [`crate::Parser::with_amplification_limits`].
+    pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
+        self.state.amplification = limits;
+        self
+    }
+
+    /// Change the amplification limits; meant for before parsing starts.
+    pub fn set_amplification_limits(&mut self, limits: AmplificationLimits) {
+        self.state.amplification = limits;
+    }
+
     /// See [`crate::Parser::with_expansion_limits`].
     pub fn with_expansion_limits(mut self, limits: ExpansionLimits) -> Self {
         self.state.expansion_limits = limits;
@@ -254,6 +265,7 @@ impl<'l> StreamParser<'l> {
                     }
                     let dtd: Dtd = lexer.take_dtd();
                     self.state.span = Span { start, end };
+                    self.state.direct_bytes = end.rebase(base).byte_offset as u64;
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
                     for (event, span) in out.drain(..) {
                         let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
