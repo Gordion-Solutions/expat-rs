@@ -139,7 +139,7 @@ mod token;
 
 pub use chars::Edition;
 pub use encoding::{decode, StreamDecoder};
-pub use entities::ExpansionLimits;
+pub use entities::{AmplificationLimits, ExpansionLimits};
 pub use error::{ErrorKind, Position, Result, XmlError};
 pub use event::{local_name, Attribute, ContentKind, ContentModel, ContentNode, Event, Located, Quantifier, Span};
 pub use lexer::Lexer;

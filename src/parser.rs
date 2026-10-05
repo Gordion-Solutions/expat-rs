@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
+use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
 
@@ -100,6 +100,10 @@ pub(crate) struct State<'l> {
     /// Namespace processing, if enabled.
     pub namespaces: Option<Namespaces>,
     pub expansion_limits: ExpansionLimits,
+    pub amplification: AmplificationLimits,
+    /// Bytes of the document read so far (libexpat's "direct" bytes), for
+    /// the amplification check.
+    pub direct_bytes: u64,
     /// Cumulative bytes of expanded entity content seen so far in this
     /// document. The per-reference budget alone doesn't catch the
     /// quadratic-blowup pattern (linear-size payload with N references to a
@@ -124,6 +128,8 @@ impl<'l> State<'l> {
             loader: None,
             namespaces: None,
             expansion_limits: ExpansionLimits::default(),
+            amplification: AmplificationLimits::default(),
+            direct_bytes: 0,
             expanded_bytes_total: 0,
         }
     }
@@ -177,6 +183,17 @@ impl<'l> State<'l> {
     /// pattern (many references to one benign-looking entity); this does.
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.expanded_bytes_total = self.expanded_bytes_total.saturating_add(bytes);
+        // libexpat's billion-laughs protection (see AmplificationLimits).
+        let direct = self.direct_bytes.max(1);
+        let total = direct.saturating_add(self.expanded_bytes_total as u64);
+        if total >= self.amplification.activation_threshold
+            && total as f64 / direct as f64 > self.amplification.maximum_factor as f64
+        {
+            return Err(self.not_wf(ErrorKind::AmplificationLimitBreach, format!(
+                "input amplification factor {:.2} exceeds the maximum of {} \
+                 (from DTD and entities)",
+                total as f64 / direct as f64, self.amplification.maximum_factor)));
+        }
         if self.expanded_bytes_total > self.expansion_limits.max_expanded_bytes {
             return Err(self.not_wf(ErrorKind::AmplificationLimitBreach, format!(
                 "cumulative entity expansion exceeded {} bytes — \
@@ -474,6 +491,13 @@ impl<'a> Parser<'a> {
         self
     }
 
+    /// Configure libexpat-style amplification limits (on by default, with
+    /// libexpat's defaults); they apply alongside the expansion limits.
+    pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
+        self.state.amplification = limits;
+        self
+    }
+
     /// Produce the next event, or `Ok(None)` at end of well-formed input.
     pub fn next_event(&mut self) -> Result<Option<Event<'a>>> {
         Ok(self.next_located()?.map(|l| l.event))
@@ -495,6 +519,7 @@ impl<'a> Parser<'a> {
             match self.lexer.next_token()? {
                 Some(tok) => {
                     self.state.span = Span { start, end: self.lexer.position() };
+                    self.state.direct_bytes = self.lexer.position().byte_offset as u64;
                     let dtd = self.lexer.take_dtd();
                     self.state.handle(tok, dtd, &mut self.out)?;
                 }

@@ -44,6 +44,25 @@ impl Default for ExpansionLimits {
     }
 }
 
+/// libexpat's billion-laughs protection: once the document's own bytes plus
+/// the bytes expanded from entities reach `activation_threshold`, the
+/// ratio (document + expanded) / document may not exceed `maximum_factor`.
+/// Applies alongside [`ExpansionLimits`]; defaults are libexpat's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AmplificationLimits {
+    /// Total bytes (document + expanded) before the factor is checked.
+    pub activation_threshold: u64,
+    /// Maximum (document + expanded) / document. Values below 1.0 always
+    /// trigger once active; NaN never does.
+    pub maximum_factor: f32,
+}
+
+impl Default for AmplificationLimits {
+    fn default() -> Self {
+        Self { activation_threshold: 8 * 1024 * 1024, maximum_factor: 100.0 }
+    }
+}
+
 /// What a general entity was declared as (§4.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EntityDef {
