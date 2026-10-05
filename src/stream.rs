@@ -26,7 +26,7 @@ use crate::chars::Edition;
 use crate::encoding::StreamDecoder;
 use crate::entities::{Dtd, ExpansionLimits};
 use crate::error::{Position, Result, XmlError};
-use crate::event::Event;
+use crate::event::{Event, Located, Span};
 use crate::lexer::Lexer;
 use crate::parser::State;
 use crate::token::Token;
@@ -134,7 +134,13 @@ impl<'l> StreamParser<'l> {
 
     /// Parse the next chunk of the document's bytes. The encoding is
     /// detected as for [`crate::decode`].
-    pub fn feed(&mut self, bytes: &[u8], handler: impl FnMut(Event<'_>)) -> Result<()> {
+    pub fn feed(&mut self, bytes: &[u8], mut handler: impl FnMut(Event<'_>)) -> Result<()> {
+        self.feed_located(bytes, |l| handler(l.event))
+    }
+
+    /// Like [`feed`](Self::feed), passing each event with its [`Span`] and
+    /// source text. Positions are relative to the whole document.
+    pub fn feed_located(&mut self, bytes: &[u8], handler: impl FnMut(Located<'_>)) -> Result<()> {
         self.guarded(Input::Bytes, |p| {
             p.decoder.decode(bytes, false, &mut p.buf)?;
             p.run(false, handler)
@@ -143,7 +149,13 @@ impl<'l> StreamParser<'l> {
 
     /// Parse the next chunk of the document as text. Don't mix with
     /// [`feed`](Self::feed) in one document.
-    pub fn feed_str(&mut self, text: &str, handler: impl FnMut(Event<'_>)) -> Result<()> {
+    pub fn feed_str(&mut self, text: &str, mut handler: impl FnMut(Event<'_>)) -> Result<()> {
+        self.feed_str_located(text, |l| handler(l.event))
+    }
+
+    /// Like [`feed_str`](Self::feed_str), with spans (see
+    /// [`feed_located`](Self::feed_located)).
+    pub fn feed_str_located(&mut self, text: &str, handler: impl FnMut(Located<'_>)) -> Result<()> {
         self.guarded(Input::Text, |p| {
             p.buf.push_str(text);
             p.run(false, handler)
@@ -151,7 +163,13 @@ impl<'l> StreamParser<'l> {
     }
 
     /// End of input: parse what remains and check the document is complete.
-    pub fn finish(&mut self, handler: impl FnMut(Event<'_>)) -> Result<()> {
+    pub fn finish(&mut self, mut handler: impl FnMut(Event<'_>)) -> Result<()> {
+        self.finish_located(|l| handler(l.event))
+    }
+
+    /// Like [`finish`](Self::finish), with spans (see
+    /// [`feed_located`](Self::feed_located)).
+    pub fn finish_located(&mut self, handler: impl FnMut(Located<'_>)) -> Result<()> {
         let input = self.input.unwrap_or(Input::Text);
         self.guarded(input, |p| {
             if input == Input::Bytes {
@@ -181,7 +199,7 @@ impl<'l> StreamParser<'l> {
 
     /// Tokenise and handle as much of `buf` as is complete, then drop the
     /// consumed text.
-    fn run(&mut self, last: bool, mut handler: impl FnMut(Event<'_>)) -> Result<()> {
+    fn run(&mut self, last: bool, mut handler: impl FnMut(Located<'_>)) -> Result<()> {
         if !last && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
             return Ok(()); // reparse deferral: wait for more input
         }
@@ -210,8 +228,13 @@ impl<'l> StreamParser<'l> {
                         tok = Token::Text(text);
                     }
                     let dtd: Dtd = lexer.take_dtd();
+                    self.state.span = Span { start, end };
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
-                    out.drain(..).for_each(&mut handler);
+                    for (event, span) in out.drain(..) {
+                        let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
+                        let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
+                        handler(Located { event, span, raw });
+                    }
                     consumed = Some(end);
                     if end.byte_offset < lexer.position().byte_offset {
                         break; // text was cut short; resume from `end` next time

@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::chars::{is_name_char, is_name_start_char, Edition};
 use crate::error::{Position, Result, XmlError};
-use crate::event::{Attribute, Event};
+use crate::event::{Attribute, Event, Span};
 
 pub(crate) const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 pub(crate) const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
@@ -79,17 +79,23 @@ impl Namespaces {
     /// Process one event: resolve names on element starts, pop scopes on
     /// element ends, and check the other names that may not contain a
     /// colon. Pushes the resulting event(s) onto `out`.
-    pub fn process<'a>(&mut self, event: Event<'a>, pos: Position, out: &mut VecDeque<Event<'a>>) -> Result<()> {
+    pub fn process<'a>(
+        &mut self,
+        event: Event<'a>,
+        span: Span,
+        pos: Position,
+        out: &mut VecDeque<(Event<'a>, Span)>,
+    ) -> Result<()> {
         match event {
-            Event::StartElement { name, attributes, .. } => self.start(name, attributes, pos, out),
+            Event::StartElement { name, attributes, .. } => self.start(name, attributes, span, pos, out),
             Event::EndElement(name) => {
                 let scope = self.scopes.pop().unwrap_or_default();
-                out.push_back(Event::EndElement(name));
+                out.push_back((Event::EndElement(name), span));
                 for (prefix, _) in scope.into_iter().rev() {
                     if let Some(stack) = self.bindings.get_mut(prefix.as_deref().unwrap_or("")) {
                         stack.pop();
                     }
-                    out.push_back(Event::EndNamespace { prefix: prefix.map(Cow::Owned) });
+                    out.push_back((Event::EndNamespace { prefix: prefix.map(Cow::Owned) }, span));
                 }
                 Ok(())
             }
@@ -103,7 +109,7 @@ impl Namespaces {
                 Err(error(pos, format!("entity name {name:?} contains a colon")))
             }
             other => {
-                out.push_back(other);
+                out.push_back((other, span));
                 Ok(())
             }
         }
@@ -113,8 +119,9 @@ impl Namespaces {
         &mut self,
         name: Cow<'a, str>,
         attributes: Vec<Attribute<'a>>,
+        span: Span,
         pos: Position,
-        out: &mut VecDeque<Event<'a>>,
+        out: &mut VecDeque<(Event<'a>, Span)>,
     ) -> Result<()> {
         // Declarations first: they apply to the element's own name and
         // attributes (including declarations defaulted from the DTD).
@@ -147,10 +154,10 @@ impl Namespaces {
                 _ => {}
             }
             let uri = (!uri.is_empty()).then(|| uri.to_string());
-            out.push_back(Event::StartNamespace {
+            out.push_back((Event::StartNamespace {
                 prefix: prefix.clone().map(Cow::Owned),
                 uri: uri.clone().map(Cow::Owned),
-            });
+            }, span));
             self.bindings.entry(prefix.clone().unwrap_or_default()).or_default().push(uri.clone());
             scope.push((prefix, uri));
         }
@@ -187,7 +194,7 @@ impl Namespaces {
                 }
             }
         }
-        out.push_back(Event::StartElement { name, namespace, attributes });
+        out.push_back((Event::StartElement { name, namespace, attributes }, span));
         Ok(())
     }
 }

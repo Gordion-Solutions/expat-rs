@@ -62,6 +62,22 @@ impl<'a> Lexer<'a> {
     fn scan_internal_subset(&mut self) -> Result<()> {
         loop {
             self.skip_whitespace();
+            // Every declaration recorded below gets the span of the
+            // construct it came from.
+            let start = self.pos;
+            self.scan_subset_item()?;
+            while self.dtd.spans.len() < self.dtd.decls.len() {
+                self.dtd.spans.push((start, self.pos));
+            }
+            if self.current() == Some(b']') {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One item of the internal subset (or nothing, at the closing ']').
+    fn scan_subset_item(&mut self) -> Result<()> {
+        {
             let rest = &self.src[self.pos.byte_offset..];
             if rest.is_empty() {
                 return Err(XmlError::UnexpectedEof { pos: self.pos, context: "DOCTYPE internal subset" });
@@ -102,6 +118,7 @@ impl<'a> Lexer<'a> {
                                         parameter-entity reference or ']' in internal subset"));
             }
         }
+        Ok(())
     }
 
     /// §4.1 [Production 69]: PEReference ::= '%' Name ';'
