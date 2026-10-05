@@ -23,7 +23,7 @@
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::encoding::StreamDecoder;
+use crate::encoding::{ByteMap, StreamDecoder, UnknownEncodingHandler};
 use crate::entities::{AmplificationLimits, Dtd, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Event, Located, Span};
@@ -71,6 +71,8 @@ pub struct StreamParser<'l> {
     input: Option<Input>,
     /// A parser that has failed stays failed.
     failed: Option<XmlError>,
+    /// Supplies byte maps for encodings expat-rs doesn't know.
+    unknown_encoding: Option<UnknownEncodingHandler<'l>>,
     /// Size of `buf` when the last pass stopped at an incomplete construct
     /// (0 if it didn't). See the module docs on reparse deferral.
     stalled_at: usize,
@@ -102,6 +104,7 @@ impl<'l> StreamParser<'l> {
             at_start: true,
             input: None,
             failed: None,
+            unknown_encoding: None,
             stalled_at: 0,
             deferral: true,
             finished: false,
@@ -150,6 +153,23 @@ impl<'l> StreamParser<'l> {
         self.deferral
     }
 
+    /// Decode the input as `encoding`, whatever it declares (libexpat's
+    /// protocol encoding, as set by `XML_ParserCreate(encoding)` or
+    /// `XML_SetEncoding`). See [`StreamDecoder::with_encoding`] for the
+    /// names understood; others go to the unknown-encoding handler.
+    pub fn with_encoding(mut self, encoding: &str) -> Self {
+        self.decoder = StreamDecoder::with_encoding(encoding);
+        self
+    }
+
+    /// Supply a [`ByteMap`] for declared (or forced) encodings expat-rs
+    /// doesn't know, as libexpat's `XML_SetUnknownEncodingHandler` does;
+    /// returning `None` makes the encoding an error.
+    pub fn with_unknown_encoding(mut self, handler: impl FnMut(&str) -> Option<ByteMap> + 'l) -> Self {
+        self.unknown_encoding = Some(Box::new(handler));
+        self
+    }
+
     /// See [`crate::Parser::with_amplification_limits`].
     pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
         self.state.amplification = limits;
@@ -177,7 +197,8 @@ impl<'l> StreamParser<'l> {
     /// source text. Positions are relative to the whole document.
     pub fn feed_located(&mut self, bytes: &[u8], handler: impl FnMut(Located<'_>)) -> Result<()> {
         self.guarded(Input::Bytes, |p| {
-            p.decoder.decode(bytes, false, &mut p.buf)?;
+            let unknown = &mut p.unknown_encoding;
+            p.decoder.decode_with(bytes, false, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
             p.run(false, handler)
         })
     }
@@ -208,7 +229,8 @@ impl<'l> StreamParser<'l> {
         let input = self.input.unwrap_or(Input::Text);
         self.guarded(input, |p| {
             if input == Input::Bytes {
-                p.decoder.decode(&[], true, &mut p.buf)?;
+                let unknown = &mut p.unknown_encoding;
+                p.decoder.decode_with(&[], true, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
             }
             p.run(true, handler)?;
             p.finished = true;

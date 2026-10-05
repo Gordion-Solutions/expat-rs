@@ -138,7 +138,7 @@ mod stream;
 mod token;
 
 pub use chars::Edition;
-pub use encoding::{decode, StreamDecoder};
+pub use encoding::{decode, ByteMap, StreamDecoder, UnknownEncodingHandler};
 pub use entities::{AmplificationLimits, ExpansionLimits};
 pub use error::{ErrorKind, Position, Result, XmlError};
 pub use event::{local_name, Attribute, ContentKind, ContentModel, ContentNode, Event, Located, Quantifier, Span};
