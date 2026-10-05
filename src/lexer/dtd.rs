@@ -11,6 +11,7 @@
 
 use super::Lexer;
 use crate::entities::{expand_char_refs, Dtd, DtdDecl, EntityDef};
+use crate::event::{ContentKind, ContentModel, ContentNode, Quantifier};
 use crate::error::{ErrorKind, Result, XmlError};
 use crate::event::normalize_newlines;
 use crate::token::Token;
@@ -29,15 +30,17 @@ impl<'a> Lexer<'a> {
         self.dtd = Dtd::default();
 
         let had_space = self.skip_whitespace();
+        let (mut public_id, mut system_id) = (None, None);
         if self.at_keyword(b"SYSTEM") || self.at_keyword(b"PUBLIC") {
             if !had_space {
                 return Err(self.not_wf("whitespace required before external ID"));
             }
-            self.scan_external_id(false)?;
+            (public_id, system_id) = self.scan_external_id(false)?;
             self.dtd.external_subset = true;
             self.skip_whitespace();
         }
-        if self.current() == Some(b'[') {
+        let has_internal_subset = self.current() == Some(b'[');
+        if has_internal_subset {
             self.bump();
             self.in_subset = true;
             let subset = self.scan_internal_subset();
@@ -51,7 +54,7 @@ impl<'a> Lexer<'a> {
         }
         let body = self.slice(body_start).trim();
         self.bump();
-        Ok(Token::Doctype { name, body })
+        Ok(Token::Doctype { name, body, system_id, public_id, has_internal_subset })
     }
 
     /// §2.8 [Productions 28a, 28b]:
@@ -139,44 +142,75 @@ impl<'a> Lexer<'a> {
     ///   contentspec ::= 'EMPTY' | 'ANY' | Mixed | children
     fn scan_element_decl(&mut self) -> Result<()> {
         self.require_whitespace("after '<!ELEMENT'")?;
-        self.scan_name()?;
+        let name = self.scan_name()?;
         self.require_whitespace("after element name")?;
-        if !(self.try_keyword(b"EMPTY") || self.try_keyword(b"ANY")) {
+        let leaf = |kind| ContentModel {
+            nodes: vec![ContentNode { kind, quant: Quantifier::None, name: None, children: Vec::new() }],
+            root: 0,
+        };
+        let model = if self.try_keyword(b"EMPTY") {
+            leaf(ContentKind::Empty)
+        } else if self.try_keyword(b"ANY") {
+            leaf(ContentKind::Any)
+        } else {
             self.expect_byte(b'(', "expected EMPTY, ANY or '(' in element declaration")?;
             self.skip_whitespace();
             if self.try_literal(b"#PCDATA") {
-                self.scan_mixed()?;
+                self.scan_mixed()?
             } else {
-                self.scan_group_body()?;
+                self.scan_group_body()?
             }
-        }
+        };
         self.skip_whitespace();
-        self.expect_byte(b'>', "expected '>' to close element declaration")
+        self.expect_byte(b'>', "expected '>' to close element declaration")?;
+        self.dtd.decls.push(DtdDecl::Element { name: name.to_string(), model });
+        Ok(())
+    }
+
+    fn name_node(name: &str, quant: Quantifier) -> ContentNode {
+        ContentNode { kind: ContentKind::Name, quant, name: Some(name.to_string()), children: Vec::new() }
+    }
+
+    /// Consume an occurrence indicator, if any.
+    fn scan_occurrence(&mut self) -> Quantifier {
+        let q = match self.current() {
+            Some(b'?') => Quantifier::Opt,
+            Some(b'*') => Quantifier::Rep,
+            Some(b'+') => Quantifier::Plus,
+            _ => return Quantifier::None,
+        };
+        self.bump();
+        q
     }
 
     /// §3.2.2 [Production 51], after `'(' S? '#PCDATA'`:
     ///
     ///   Mixed ::= '(' S? '#PCDATA' (S? '|' S? Name)* S? ')*'
     ///           | '(' S? '#PCDATA' S? ')'
-    fn scan_mixed(&mut self) -> Result<()> {
-        let mut has_names = false;
+    fn scan_mixed(&mut self) -> Result<ContentModel> {
+        let mut nodes = Vec::new();
         loop {
             self.skip_whitespace();
             match self.current() {
                 Some(b')') => {
                     self.bump();
-                    if self.current() == Some(b'*') {
+                    let quant = if self.current() == Some(b'*') {
                         self.bump();
-                    } else if has_names {
+                        Quantifier::Rep
+                    } else if !nodes.is_empty() {
                         return Err(self.not_wf("mixed content with element names must end in ')*'"));
-                    }
-                    return Ok(());
+                    } else {
+                        Quantifier::None
+                    };
+                    let children = (0..nodes.len()).collect();
+                    nodes.push(ContentNode { kind: ContentKind::Mixed, quant, name: None, children });
+                    return Ok(ContentModel { root: nodes.len() - 1, nodes });
                 }
                 Some(b'|') => {
                     self.bump();
                     self.skip_whitespace();
-                    self.scan_name()?;
-                    has_names = true;
+                    let name = self.scan_name()?;
+                    nodes.push(Self::name_node(name, Quantifier::None));
                 }
                 _ => return Err(self.eof_or_not_wf("element declaration",
                                                    "expected '|' or ')' in mixed content")),
@@ -193,33 +227,41 @@ impl<'a> Lexer<'a> {
     /// Also consumes the outermost group's occurrence indicator. Nested
     /// groups are tracked on an explicit stack rather than by recursion, so
     /// arbitrarily deep nesting can't overflow the call stack.
-    fn scan_group_body(&mut self) -> Result<()> {
-        // One entry per open group: the separator it uses, once seen.
-        let mut groups: Vec<Option<u8>> = vec![None];
+    fn scan_group_body(&mut self) -> Result<ContentModel> {
+        // All nodes so far, and one entry per open group: the separator it
+        // uses, once seen, and the indices of the particles read so far.
+        let mut nodes: Vec<ContentNode> = Vec::new();
+        let mut groups: Vec<(Option<u8>, Vec<usize>)> = vec![(None, Vec::new())];
         loop {
             // A content particle: a nested group or a name.
             self.skip_whitespace();
             if self.current() == Some(b'(') {
                 self.bump();
-                groups.push(None);
+                groups.push((None, Vec::new()));
                 continue;
             }
-            self.scan_name()?;
-            self.skip_occurrence();
+            let name = self.scan_name()?;
+            let quant = self.scan_occurrence();
+            nodes.push(Self::name_node(name, quant));
+            groups.last_mut().expect("a group is open").1.push(nodes.len() - 1);
             // Then close groups, or a separator before the next particle.
             loop {
                 self.skip_whitespace();
                 match self.current() {
                     Some(b')') => {
                         self.bump();
-                        self.skip_occurrence();
-                        groups.pop();
-                        if groups.is_empty() {
-                            return Ok(());
+                        let quant = self.scan_occurrence();
+                        let (sep, children) = groups.pop().expect("a group is open");
+                        let kind = if sep == Some(b'|') { ContentKind::Choice } else { ContentKind::Seq };
+                        nodes.push(ContentNode { kind, quant, name: None, children });
+                        let index = nodes.len() - 1;
+                        match groups.last_mut() {
+                            Some((_, parent)) => parent.push(index),
+                            None => return Ok(ContentModel { nodes, root: index }),
                         }
                     }
                     Some(c @ (b'|' | b',')) => {
-                        let sep = groups.last_mut().expect("a group is open");
+                        let sep = &mut groups.last_mut().expect("a group is open").0;
                         if sep.is_some_and(|s| s != c) {
                             return Err(self.not_wf("cannot mix '|' and ',' in one content-model group"));
                         }
@@ -231,12 +273,6 @@ impl<'a> Lexer<'a> {
                                                        "expected '|', ',' or ')' in content model")),
                 }
             }
-        }
-    }
-
-    fn skip_occurrence(&mut self) {
-        if matches!(self.current(), Some(b'?' | b'*' | b'+')) {
-            self.bump();
         }
     }
 
@@ -260,11 +296,14 @@ impl<'a> Lexer<'a> {
             let pos = self.pos;
             let name = self.scan_name()?;
             self.require_whitespace("after attribute name")?;
+            let type_start = self.pos.byte_offset;
             let cdata = self.scan_att_type()?;
+            let att_type = libexpat_att_type(self.slice(type_start));
             self.require_whitespace("after attribute type")?;
+            let required = self.at_literal(b"#REQUIRED") || self.at_literal(b"#FIXED");
             let default = self.scan_default_decl()?.map(str::to_string);
             self.dtd.decls.push(DtdDecl::AttDef {
-                element: element.to_string(), name: name.to_string(), cdata, default, pos,
+                element: element.to_string(), name: name.to_string(), att_type, required, cdata, default, pos,
             });
         }
     }
@@ -358,6 +397,7 @@ impl<'a> Lexer<'a> {
         } else {
             let (public_id, system_id) = self.scan_external_id(false)?;
             let mut unparsed = false;
+            let mut notation = None;
             let had_space = self.skip_whitespace();
             if self.at_keyword(b"NDATA") {
                 if parameter {
@@ -368,13 +408,14 @@ impl<'a> Lexer<'a> {
                 }
                 self.advance_ascii(b"NDATA".len());
                 self.require_whitespace("after NDATA")?;
-                self.scan_name()?;
+                notation = Some(self.scan_name()?.to_string());
                 unparsed = true;
             }
             EntityDef::External {
                 system_id: system_id.unwrap_or_default().to_string(),
                 public_id: public_id.map(str::to_string),
                 unparsed,
+                notation,
             }
         };
         self.skip_whitespace();
@@ -559,6 +600,11 @@ impl<'a> Lexer<'a> {
                 .is_some_and(|(c, _)| crate::chars::is_name_char(c, self.edition))
     }
 
+    /// Whether an exact literal such as `#FIXED` starts here.
+    fn at_literal(&self, lit: &[u8]) -> bool {
+        self.src[self.pos.byte_offset..].starts_with(lit)
+    }
+
     /// Consume an exact literal such as `#PCDATA` if it starts here.
     fn try_literal(&mut self, lit: &[u8]) -> bool {
         if self.src[self.pos.byte_offset..].starts_with(lit) {
@@ -568,4 +614,10 @@ impl<'a> Lexer<'a> {
             false
         }
     }
+}
+
+/// An attribute type as libexpat reports it: keywords as written,
+/// enumerations without whitespace, e.g. `(a|b)` and `NOTATION(x|y)`.
+fn libexpat_att_type(written: &str) -> String {
+    written.chars().filter(|c| !matches!(c, ' ' | '\t' | '\r' | '\n')).collect()
 }

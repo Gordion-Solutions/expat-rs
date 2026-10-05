@@ -52,7 +52,7 @@ pub(crate) enum EntityDef {
     /// references left in place, to be expanded where the entity is used.
     Internal(String),
     /// External entity (§4.2.2). Unparsed if declared with `NDATA`.
-    External { system_id: String, public_id: Option<String>, unparsed: bool },
+    External { system_id: String, public_id: Option<String>, unparsed: bool, notation: Option<String> },
 }
 
 /// One declaration from the internal subset that the parser acts on, in
@@ -61,10 +61,16 @@ pub(crate) enum EntityDef {
 #[derive(Clone, Debug)]
 pub(crate) enum DtdDecl {
     Entity { name: String, parameter: bool, def: EntityDef },
+    /// An element type declaration (§3.2).
+    Element { name: String, model: crate::event::ContentModel },
     /// One attribute definition from an attribute-list declaration (§3.3).
     AttDef {
         element: String,
         name: String,
+        /// The type as libexpat spells it (`CDATA`, `(a|b)`, ...).
+        att_type: String,
+        /// #REQUIRED or #FIXED.
+        required: bool,
         /// Declared type is CDATA. Other types get extra whitespace
         /// normalisation (§3.3.3).
         cdata: bool,

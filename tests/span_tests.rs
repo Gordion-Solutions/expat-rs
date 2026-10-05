@@ -42,10 +42,11 @@ fn internal_subset_declarations_and_entity_content() {
     assert_eq!(got[0], ("Doctype".into(), dtd.into()));
     assert_eq!(got[1], ("ProcessingInstruction".into(), "<?p x?>".into()));
     assert_eq!(got[2], ("NotationDecl".into(), "<!NOTATION n SYSTEM 's'>".into()));
-    assert_eq!(got[3], ("EndDoctype".into(), dtd.into()));
+    assert_eq!(got[3], ("EntityDecl".into(), "<!ENTITY e '<b/>'>".into()));
+    assert_eq!(got[4], ("EndDoctype".into(), dtd.into()));
     // Events from the entity carry the span of the reference.
-    assert_eq!(got[5], ("StartElement".into(), "&e;".into()));
-    assert_eq!(got[6], ("EndElement".into(), "&e;".into()));
+    assert_eq!(got[6], ("StartElement".into(), "&e;".into()));
+    assert_eq!(got[7], ("EndElement".into(), "&e;".into()));
 }
 
 #[test]
