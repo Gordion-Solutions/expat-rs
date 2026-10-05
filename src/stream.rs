@@ -74,6 +74,8 @@ pub struct StreamParser<'l> {
     /// Size of `buf` when the last pass stopped at an incomplete construct
     /// (0 if it didn't). See the module docs on reparse deferral.
     stalled_at: usize,
+    /// Whether reparse deferral is on (the default).
+    deferral: bool,
     finished: bool,
 }
 
@@ -101,6 +103,7 @@ impl<'l> StreamParser<'l> {
             input: None,
             failed: None,
             stalled_at: 0,
+            deferral: true,
             finished: false,
         }
     }
@@ -124,6 +127,27 @@ impl<'l> StreamParser<'l> {
     ) -> Self {
         self.state.loader = Some(Box::new(load));
         self
+    }
+
+    /// Turn reparse deferral on (the default) or off. See
+    /// [`set_reparse_deferral`](Self::set_reparse_deferral).
+    pub fn with_reparse_deferral(mut self, enabled: bool) -> Self {
+        self.deferral = enabled;
+        self
+    }
+
+    /// Turn reparse deferral on or off, including between chunks. With it
+    /// off, every chunk re-scans an incomplete construct from its start, so
+    /// events fire as early as possible but a huge construct fed in tiny
+    /// chunks costs quadratic time. Mirrors libexpat's
+    /// `XML_SetReparseDeferralEnabled`.
+    pub fn set_reparse_deferral(&mut self, enabled: bool) {
+        self.deferral = enabled;
+    }
+
+    /// Whether reparse deferral is on.
+    pub fn reparse_deferral(&self) -> bool {
+        self.deferral
     }
 
     /// See [`crate::Parser::with_expansion_limits`].
@@ -201,7 +225,7 @@ impl<'l> StreamParser<'l> {
     /// Tokenise and handle as much of `buf` as is complete, then drop the
     /// consumed text.
     fn run(&mut self, last: bool, mut handler: impl FnMut(Located<'_>)) -> Result<()> {
-        if !last && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
+        if !last && self.deferral && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
             return Ok(()); // reparse deferral: wait for more input
         }
         let base = self.base;

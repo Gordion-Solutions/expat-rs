@@ -190,7 +190,7 @@ impl<'l> State<'l> {
     /// references checked and budgeted, declared defaults added.
     fn attributes<'t>(&mut self, element: &str, attrs: &[crate::token::Attr<'t>]) -> Result<Vec<Attribute<'t>>> {
         let mut x = self.expander();
-        let out = x.attributes(element, attrs)?;
+        let out = x.attributes(element, attrs, false)?;
         let used = x.expanded;
         self.charge(used)?;
         Ok(out)
@@ -510,24 +510,26 @@ impl<'a> Parser<'a> {
 
 /// Per §3.1 (Unique Att Spec): no element may have two attributes with the
 /// same name. Hash-based above a handful of attributes, so an element with
-/// very many attributes costs linear, not quadratic, time.
-pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
-    let duplicate = |name: &str| XmlError::NotWellFormed {
-        pos,
+/// very many attributes costs linear, not quadratic, time. A duplicate is
+/// reported at the second attribute's name (as libexpat does), or at
+/// `fixed_pos` when given.
+pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], fixed_pos: Option<Position>) -> Result<()> {
+    let duplicate = |a: &crate::token::Attr<'_>| XmlError::NotWellFormed {
+        pos: fixed_pos.unwrap_or(a.pos),
         kind: ErrorKind::DuplicateAttribute,
-        reason: format!("duplicate attribute {name:?}"),
+        reason: format!("duplicate attribute {:?}", a.name),
     };
     if attrs.len() <= 8 {
         for (i, a) in attrs.iter().enumerate() {
             if attrs[..i].iter().any(|b| b.name == a.name) {
-                return Err(duplicate(a.name));
+                return Err(duplicate(a));
             }
         }
     } else {
         let mut seen = std::collections::HashSet::with_capacity(attrs.len());
         for a in attrs {
             if !seen.insert(a.name) {
-                return Err(duplicate(a.name));
+                return Err(duplicate(a));
             }
         }
     }
