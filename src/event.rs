@@ -12,6 +12,7 @@
 
 use std::borrow::Cow;
 
+use crate::error::Position;
 use crate::token::XmlDecl;
 
 /// Something the parser found in the document, in document order.
@@ -110,6 +111,30 @@ pub enum Event<'a> {
     /// where that is only a validity error. Mirrors libexpat's
     /// `XML_SetSkippedEntityHandler`.
     SkippedEntity(Cow<'a, str>),
+}
+
+/// Where an event came from in the (decoded) input: from `start` up to,
+/// not including, `end`. Events produced by an entity reference carry the
+/// span of the reference; events for internal-subset declarations, the
+/// span of their declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    /// Position of the event's first character.
+    pub start: Position,
+    /// Position just after its last character.
+    pub end: Position,
+}
+
+/// An event with its [`Span`] and the source text the span covers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Located<'a> {
+    /// The event.
+    pub event: Event<'a>,
+    /// Where it came from.
+    pub span: Span,
+    /// The source text of `span`, exactly as written (after decoding to
+    /// UTF-8; line endings not normalised).
+    pub raw: &'a str,
 }
 
 /// An attribute on a start tag.
