@@ -300,3 +300,18 @@ fn attribute_value_references() {
         assert!(events(doc).is_err(), "accepted {doc:?}");
     }
 }
+
+#[test]
+fn duplicate_attribute_reported_at_the_second_attribute() {
+    // libexpat reports it at the second attribute's name (0-based column 9).
+    match events("<a x='1' x='2'/>") {
+        Err(XmlError::NotWellFormed { pos, .. }) => assert_eq!((pos.line, pos.column), (1, 10)),
+        other => panic!("{other:?}"),
+    }
+    let many: Vec<String> = (0..20).map(|i| format!("a{i}='1'")).collect();
+    let doc = format!("<a {} a3='2'/>", many.join(" "));
+    match events(&doc) {
+        Err(XmlError::NotWellFormed { pos, .. }) => assert_eq!(pos.byte_offset, doc.find(" a3='2'").unwrap() + 1),
+        other => panic!("{other:?}"),
+    }
+}

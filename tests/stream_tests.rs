@@ -180,3 +180,29 @@ fn earliest_error_wins_when_a_text_run_has_two() {
     assert!(matches!(p.next_event().unwrap(), Some(Event::Text(t)) if t == "ok"));
     assert!(matches!(p.next_event(), Err(XmlError::InvalidChar { .. })));
 }
+
+#[test]
+fn reparse_deferral_on_and_off_match_libexpat_timing() {
+    // CPython's test_reparse_deferral: feed "<doc" then "/>".
+    let starts = |deferral: bool| {
+        let mut p = StreamParser::new().with_reparse_deferral(deferral);
+        let mut seen = Vec::new();
+        for chunk in [&b"<doc"[..], b"/>"] {
+            p.feed(chunk, |e| if let Event::StartElement { .. } = e { seen.push("start") }).unwrap();
+        }
+        let before_finish = seen.len();
+        p.finish(|_| {}).unwrap();
+        before_finish
+    };
+    assert_eq!(starts(true), 0, "deferred: nothing before the final call (libexpat with deferral)");
+    assert_eq!(starts(false), 1, "not deferred: fires on the second chunk (libexpat without)");
+
+    // Switchable between chunks.
+    let mut p = StreamParser::new();
+    assert!(p.reparse_deferral());
+    let mut n = 0;
+    p.feed(b"<doc", |_| n += 1).unwrap();
+    p.set_reparse_deferral(false);
+    p.feed(b"/>", |_| n += 1).unwrap();
+    assert_eq!(n, 2, "start and end delivered once deferral is off");
+}

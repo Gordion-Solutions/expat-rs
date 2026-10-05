@@ -79,8 +79,12 @@ impl<'e, 'l> Expander<'e, 'l> {
     /// Event attributes for a start tag of `element`: values normalised
     /// (§3.3.3) with their entity references checked, then any declared
     /// defaults the tag doesn't specify.
-    pub fn attributes<'x>(&mut self, element: &str, attrs: &[Attr<'x>]) -> Result<Vec<Attribute<'x>>> {
-        crate::parser::check_unique_attrs(attrs, self.pos)?;
+    ///
+    /// `in_entity`: the tag comes from an entity's replacement text, whose
+    /// attribute positions aren't document positions, so a duplicate is
+    /// reported at the entity reference instead of at the attribute.
+    pub fn attributes<'x>(&mut self, element: &str, attrs: &[Attr<'x>], in_entity: bool) -> Result<Vec<Attribute<'x>>> {
+        crate::parser::check_unique_attrs(attrs, in_entity.then_some(self.pos))?;
         let declared = self.attlists.get(element);
         let mut out = Vec::with_capacity(attrs.len());
         for a in attrs {
@@ -285,7 +289,7 @@ impl<'e, 'l> Expander<'e, 'l> {
 
     /// Event attributes for a start tag inside an entity, owned.
     fn tag_attributes(&mut self, element: &str, attributes: &[Attr<'_>]) -> Result<Vec<Attribute<'static>>> {
-        Ok(self.attributes(element, attributes)?
+        Ok(self.attributes(element, attributes, true)?
             .into_iter()
             .map(|a| Attribute { name: owned(&a.name), namespace: None, value: owned(&a.value), specified: a.specified })
             .collect())
