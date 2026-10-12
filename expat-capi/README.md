@@ -26,8 +26,13 @@ Only the `XML_*` symbols are exported (`exported_symbols.txt`, `expat.map`).
 
 ## What's there
 
-All 54 functions CPython links against, plus `XML_ParserCreate` and
-`XML_ParserCreateNS`. Handlers may call back into the parser
+All 54 functions CPython links against, plus the rest of what libexpat's
+own `xmlwf` uses (`XML_ParserCreate`, `XML_ParserCreateNS`,
+`XML_DefaultCurrent`, `XML_GetCurrentByteCount`, `XML_GetIdAttributeIndex`,
+`XML_UseParserAsHandlerArg`, `XML_SetCdataSectionHandler`,
+`XML_SetDoctypeDeclHandler`, and the 2.7.2 alloc-tracker settings, which are
+accepted and have no effect). Like libexpat, it applies the Fourth Edition's
+name rules and accepts any version number made of `[A-Za-z0-9._-]`. Handlers may call back into the parser
 (`XML_StopParser`, `XML_GetCurrentLineNumber`, setting handlers, ...) as
 libexpat allows; calling `XML_Parse` from inside a handler fails cleanly.
 See the safety notes at the top of `src/lib.rs`.
@@ -40,6 +45,14 @@ what libexpat 2.8.2 prints (`tests/c/*.expected`, recorded by
 `tools/regen_expected.sh`): callbacks and their arguments, line, column and
 byte positions, error codes, messages and positions, stopping, buffers,
 encodings, content models, settings.
+
+`tools/xmlwf_suite.py` runs libexpat's own `xmlwf` (a dynamically linked
+build, such as Homebrew's) over the W3C conformance suite on libexpat and on
+expat-capi and compares exit status, messages and written output in five
+modes. On 12 Oct 2026, 2638 files: every document libexpat accepts gives
+identical output except `eduni/misc/007.xml` (below); no document libexpat
+rejects is accepted; about 1100 malformed documents get a different error
+message or position (see below).
 
 `src/generated.rs` (constants, error strings, struct sizes) is generated
 from the header and libexpat's `XML_ErrorString` by `tools/generate.py`;
@@ -59,5 +72,10 @@ both tools use libexpat only as a black box.
 - `XML_StopParser(parser, XML_TRUE)` (suspend) isn't supported;
   `XML_ResumeParser` isn't exported.
 - `XML_GetInputContext` returns NULL.
-- libexpat accepts any `version` in the XML declaration; expat-rs accepts
-  only `1.x`, as XML 1.0 requires.
+- For about 1100 of the suite's malformed documents (mostly in DTDs) the
+  error is classified or placed differently: libexpat's grammar reports
+  "syntax error" where expat-rs finds an invalid token and the reverse,
+  and positions follow. Same verdict in every case.
+- Deliberately different: a UTF-8 byte order mark with an encoding
+  declaration naming another encoding is a fatal error (XML 1.0 §4.3.3;
+  the suite's `hst-lhs-007`), which libexpat accepts.

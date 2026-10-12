@@ -32,7 +32,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr
 use std::ptr;
 
 use expat_rs::{
-    AmplificationLimits, ByteMap, ContentKind, ContentModel, ErrorKind, Event, Located, Position, Quantifier, Span,
+    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, ErrorKind, Event, Located, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
 use generated::*;
@@ -208,6 +208,15 @@ pub struct Shim {
     /// Stopped during the start of an empty element (`<e/>`): its end is
     /// still delivered, since libexpat finishes the token first.
     stop_in_empty_tag: Cell<bool>,
+    /// `XML_UseParserAsHandlerArg`: handlers get the parser, not user data.
+    parser_as_arg: Cell<bool>,
+    /// Source text of the event being delivered, for `XML_DefaultCurrent`
+    /// (kept only while a default handler is set).
+    current_raw: RefCell<String>,
+    /// Attribute declared ID for each element (`XML_GetIdAttributeIndex`).
+    id_attributes: RefCell<std::collections::HashMap<String, String>>,
+    /// `XML_GetIdAttributeIndex` for the current start tag.
+    id_index: Cell<c_int>,
     /// Namespace separator from `XML_ParserCreateNS` (`Some(0)`: names are
     /// concatenated without one).
     ns_sep: Option<u8>,
@@ -251,6 +260,10 @@ impl Shim {
             current_span: Cell::new(None),
             token_end: Cell::new(Position::start()),
             stop_in_empty_tag: Cell::new(false),
+            parser_as_arg: Cell::new(false),
+            current_raw: RefCell::new(String::new()),
+            id_attributes: RefCell::new(std::collections::HashMap::new()),
+            id_index: Cell::new(-1),
             ns_sep,
             ns_triplets: Cell::new(false),
             base: RefCell::new(None),
@@ -289,7 +302,11 @@ impl Shim {
     /// The expat-rs parser for this shim, configured from the options set
     /// so far.
     fn make_parser(&self) -> StreamParser<'static> {
+        // libexpat applies the Fourth Edition's name rules (Appendix B)
+        // but accepts any version number made of name characters.
         let mut p = StreamParser::new()
+            .with_edition(Edition::Fourth)
+            .with_libexpat_versions()
             .with_reparse_deferral(self.reparse_deferral.get())
             .with_amplification_limits(self.amplification.get());
         if self.ns_sep.is_some() {
@@ -447,8 +464,13 @@ fn ptr_of(s: &Option<CString>) -> *const c_char {
 }
 
 impl Shim {
+    /// The first argument for handlers.
     fn ud(&self) -> *mut c_void {
-        self.user_data.get()
+        if self.parser_as_arg.get() {
+            (self as *const Shim).cast_mut().cast()
+        } else {
+            self.user_data.get()
+        }
     }
 
     /// The name a namespace-processing libexpat reports: `uri<sep>local`,
@@ -499,6 +521,12 @@ impl Shim {
         self.pos.set(l.span.start);
         self.current_span.set(Some(l.span));
         self.token_end.set(l.span.end);
+        if self.handlers.default.get().is_some() {
+            if let Ok(mut raw) = self.current_raw.try_borrow_mut() {
+                raw.clear();
+                raw.push_str(l.raw);
+            }
+        }
         let h = &self.handlers;
         let ud = self.ud();
         match l.event {
@@ -533,6 +561,11 @@ impl Shim {
             }
             Event::StartElement { name, namespace, attributes } => {
                 self.specified_atts.set(2 * attributes.iter().filter(|a| a.specified).count() as c_int);
+                let id = self.id_attributes.try_borrow().ok().and_then(|ids| {
+                    let id = ids.get(name.as_ref())?;
+                    attributes.iter().position(|a| a.name == id.as_str())
+                });
+                self.id_index.set(id.map_or(-1, |i| 2 * i as c_int));
                 let n = self.expanded_name(&name, namespace.as_deref());
                 if let Ok(mut open) = self.open.try_borrow_mut() {
                     open.push(n.clone());
@@ -652,6 +685,12 @@ impl Shim {
                 }
             }
             Event::AttlistDecl { element, attribute, att_type, default, required } => {
+                if att_type == "ID" {
+                    if let Ok(mut ids) = self.id_attributes.try_borrow_mut() {
+                        // The first ID declaration for an element counts.
+                        ids.entry(element.to_string()).or_insert_with(|| attribute.to_string());
+                    }
+                }
                 if let Some(f) = h.attlist_decl.get() {
                     let (e, a, t, d) = (cstr(&element), cstr(&attribute), cstr(&att_type), opt_cstr(default.as_deref()));
                     // SAFETY: registered AttlistDeclHandler; valid C strings
@@ -1016,6 +1055,80 @@ pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> XML_Inde
 pub unsafe extern "C" fn XML_GetSpecifiedAttributeCount(parser: XML_Parser) -> c_int {
     // SAFETY: see `shim`.
     unsafe { shim(parser) }.map_or(-1, |p| p.specified_atts.get())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_GetIdAttributeIndex(parser: XML_Parser) -> c_int {
+    // SAFETY: see `shim`.
+    unsafe { shim(parser) }.map_or(-1, |p| p.id_index.get())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_GetCurrentByteCount(parser: XML_Parser) -> c_int {
+    // SAFETY: see `shim`.
+    let Some(p) = (unsafe { shim(parser) }) else { return 0 };
+    if p.status.get() != Status::Parsing {
+        return 0;
+    }
+    (p.token_end.get().byte_offset.saturating_sub(p.pos.get().byte_offset)) as c_int
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
+    // SAFETY: see `shim`.
+    let Some(p) = (unsafe { shim(parser) }) else { return };
+    if p.status.get() != Status::Parsing {
+        return;
+    }
+    // A copy, so the default handler may itself call back in.
+    let raw = p.current_raw.try_borrow().map(|r| r.clone()).unwrap_or_default();
+    if !raw.is_empty() {
+        p.to_default(&raw);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_UseParserAsHandlerArg(parser: XML_Parser) {
+    // SAFETY: see `shim`.
+    if let Some(p) = unsafe { shim(parser) } {
+        p.parser_as_arg.set(true);
+    }
+}
+
+/// libexpat 2.7.2+: limits on allocation amplification. expat-rs's
+/// allocations are bounded by the input and the expansion limits, so these
+/// are accepted (with libexpat's argument checks) and have no effect.
+#[no_mangle]
+pub unsafe extern "C" fn XML_SetAllocTrackerMaximumAmplification(parser: XML_Parser, maximum: f32) -> XML_Bool {
+    (!parser.is_null() && !maximum.is_nan() && maximum >= 1.0) as XML_Bool
+}
+
+/// See [`XML_SetAllocTrackerMaximumAmplification`].
+#[no_mangle]
+pub unsafe extern "C" fn XML_SetAllocTrackerActivationThreshold(parser: XML_Parser, _threshold: c_ulonglong) -> XML_Bool {
+    (!parser.is_null()) as XML_Bool
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_SetCdataSectionHandler(parser: XML_Parser, start: CdataSectionHandler, end: CdataSectionHandler) {
+    // SAFETY: see `shim`.
+    if let Some(p) = unsafe { shim(parser) } {
+        p.handlers.start_cdata.set(start);
+        p.handlers.end_cdata.set(end);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn XML_SetDoctypeDeclHandler(
+    parser: XML_Parser,
+    start: StartDoctypeDeclHandler,
+    end: EndDoctypeDeclHandler,
+) {
+    // SAFETY: see `shim`.
+    if let Some(p) = unsafe { shim(parser) } {
+        p.handlers.start_doctype.set(start);
+        p.handlers.end_doctype.set(end);
+    }
 }
 
 #[no_mangle]

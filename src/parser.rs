@@ -87,6 +87,8 @@ pub(crate) struct State<'l> {
     /// Attribute types and defaults from `<!ATTLIST>` declarations.
     attlists: AttlistTable,
     pub edition: Edition,
+    /// See `Parser::with_libexpat_versions`.
+    pub(crate) libexpat_versions: bool,
     /// `standalone` from the XML declaration, if given.
     standalone: Option<bool>,
     /// Whether §4.1 WFC Entity Declared applies: no DTD, or only an
@@ -123,6 +125,7 @@ impl<'l> State<'l> {
             entities: EntityTable::new(),
             attlists: AttlistTable::default(),
             edition: Edition::default(),
+            libexpat_versions: false,
             standalone: None,
             entity_declared_wfc: true,
             loader: None,
@@ -472,6 +475,16 @@ impl<'a> Parser<'a> {
     pub fn with_edition(mut self, edition: Edition) -> Self {
         self.lexer = self.lexer.with_edition(edition);
         self.state.set_edition(edition);
+        self
+    }
+
+    /// Accept any `version` in the XML declaration that libexpat accepts:
+    /// any run of `[A-Za-z0-9._-]`, even an empty one, rather than only
+    /// what the edition allows (`1.0`, or `1.` and digits). For drop-in
+    /// compatibility with libexpat; off by default.
+    pub fn with_libexpat_versions(mut self) -> Self {
+        self.lexer = self.lexer.with_libexpat_versions(true);
+        self.state.libexpat_versions = true;
         self
     }
 

@@ -117,6 +117,12 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// See [`crate::Parser::with_libexpat_versions`].
+    pub fn with_libexpat_versions(mut self) -> Self {
+        self.state.libexpat_versions = true;
+        self
+    }
+
     /// See [`crate::Parser::with_namespaces`].
     pub fn with_namespaces(mut self) -> Self {
         self.state.enable_namespaces();
@@ -287,7 +293,8 @@ impl<'l> StreamParser<'l> {
         }
         let base = self.base;
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
-            .with_edition(self.state.edition);
+            .with_edition(self.state.edition)
+            .with_libexpat_versions(self.state.libexpat_versions);
         let mut out = VecDeque::new();
         let mut consumed: Option<Position> = None;
         loop {

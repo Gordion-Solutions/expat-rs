@@ -36,6 +36,9 @@ pub struct Lexer<'a> {
     /// Inside the DOCTYPE's internal subset (errors there are DTD syntax
     /// errors, as libexpat classifies them).
     in_subset: bool,
+    /// Accept any version number libexpat accepts (see
+    /// `Parser::with_libexpat_versions`).
+    any_version: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -53,6 +56,7 @@ impl<'a> Lexer<'a> {
             doc_start,
             dtd: Dtd::default(),
             in_subset: false,
+            any_version: false,
         }
     }
 
@@ -69,6 +73,7 @@ impl<'a> Lexer<'a> {
             doc_start: usize::MAX,
             dtd: Dtd::default(),
             in_subset: false,
+            any_version: false,
         }
     }
 
@@ -144,6 +149,13 @@ impl<'a> Lexer<'a> {
         } else {
             Err(not_wf(self.pos, "expected '?>' to close text declaration (standalone is not allowed here)"))
         }
+    }
+
+    /// Accept any version number made of `[A-Za-z0-9._-]` (even an empty
+    /// one), as libexpat does, instead of the edition's rule.
+    pub fn with_libexpat_versions(mut self, on: bool) -> Self {
+        self.any_version = on;
+        self
     }
 
     /// Select the XML 1.0 edition whose Name rules apply. Default: Fifth.
@@ -564,7 +576,12 @@ impl<'a> Lexer<'a> {
         self.scan_eq()?;
         let version_pos = self.ahead(1); // inside the quote
         let version = self.scan_attr_value()?;
-        if !self.is_valid_version(version) {
+        if self.any_version {
+            // libexpat's rule, reported at the first character outside it.
+            if let Some(i) = version.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))) {
+                return Err(not_wf(version_pos.advance(&version[..i]), &format!("invalid XML version number {version:?}")));
+            }
+        } else if !self.is_valid_version(version) {
             return Err(not_wf(version_pos, &format!("invalid XML version number {version:?}")));
         }
 
