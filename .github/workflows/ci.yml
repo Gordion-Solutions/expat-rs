@@ -21,7 +21,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo build
-        run: cargo build --release --verbose
+        run: cargo build --release --workspace --verbose
 
+      # Includes expat-capi's Layer 1 test, which compiles C probes against
+      # expat.h and the static library and compares with libexpat's output.
       - name: cargo test
-        run: cargo test --release --verbose
+        run: cargo test --release --workspace --verbose

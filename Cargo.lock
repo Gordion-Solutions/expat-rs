@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "expat-capi"
+version = "0.1.0"
+dependencies = [
+ "expat-rs",
+]
+
+[[package]]
 name = "expat-rs"
 version = "0.2.0"
 dependencies = [

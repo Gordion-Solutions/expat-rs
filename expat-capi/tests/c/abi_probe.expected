@@ -1,0 +1,220 @@
+=== all callbacks
+xmldecl 1.0 utf-8 0
+doctype doc sys=doc.dtd pub=-//P//EN internal=1
+element doc SEQ(NAME:a CHOICE(NAME:b NAME:c)* NAME:d?)
+element a MIXED(NAME:b)*
+element e EMPTY
+attlist doc x CDATA (null) 0
+attlist doc y (p|q) p 0
+attlist doc z CDATA zz 1
+entity ge pe=0 value=[general &amp; text] base=(null) sys=(null) pub=(null) ndata=(null)
+entity pe pe=1 value=[param] base=(null) sys=(null) pub=(null) ndata=(null)
+entity ext pe=0 value=(null) base=(null) sys=ext.xml pub=(null) ndata=(null)
+entity img pe=0 value=(null) base=(null) sys=i.gif pub=(null) ndata=gif
+notation gif base=(null) sys=(null) pub=-//GIF//EN
+pi dtdpi [data]
+    @12:2 byte=430
+comment [ dtd comment ]
+    @13:2 byte=447
+end-doctype
+start doc ud=U spec=2 [x=1] [y=p] [z=zz]
+    @15:0 byte=471
+start a ud=U spec=0
+    @15:11 byte=482
+text [t]
+start-cdata
+text [<raw>]
+end-cdata
+text [general ]
+text [&]
+text [ text]
+end a
+    @15:36 byte=507
+pi pi [body ]
+    @15:40 byte=511
+comment [ c ]
+    @15:53 byte=524
+end doc
+    @15:63 byte=534
+OK
+base=http://base/
+=== base passed to declarations
+doctype d sys=(null) pub=(null) internal=1
+entity e pe=0 value=(null) base=http://base/ sys=e.xml pub=(null) ndata=(null)
+notation n base=http://base/ sys=n pub=(null)
+end-doctype
+start d ud=U spec=0
+    @1:65 byte=65
+end d
+    @1:69 byte=69
+OK
+=== namespaces
+start-ns (null) urn:d
+start-ns p urn:p
+start urn:d|r ud=U spec=0
+    @1:0 byte=0
+start urn:p|a ud=U spec=4 [urn:p|x=1] [y=2]
+    @1:33 byte=33
+start-ns (null) (null)
+start b ud=U spec=0
+    @1:52 byte=52
+end b
+    @1:65 byte=65
+end-ns (null)
+end urn:p|a
+    @1:65 byte=65
+end urn:d|r
+    @1:71 byte=71
+end-ns p
+end-ns (null)
+OK
+=== namespace triplets
+start-ns p urn:p
+start urn:p|r|p ud=U spec=2 [urn:p|a|p=v]
+    @1:0 byte=0
+start urn:p|c|p ud=U spec=0
+    @1:29 byte=29
+end urn:p|c|p
+    @1:35 byte=35
+end urn:p|r|p
+    @1:35 byte=35
+end-ns p
+OK
+=== newline separator (as ElementTree)
+start-ns (null) urn:d
+start urn:d
+r ud=U spec=0
+    @1:0 byte=0
+end urn:d
+r
+    @1:18 byte=18
+end-ns (null)
+OK
+=== namespace error
+ERROR 27 'unbound prefix' @1:0
+=== default handler only
+default [<?xml version='1.0'?>]
+default [<r a='1'>]
+default [x]
+default [<![CDATA[]
+default [y]
+default []]>]
+default [<!--c-->]
+default [<?p q?>]
+default [
+]
+default [</r>]
+OK
+=== stop from handler
+start r
+start stop
+stop -> 1
+end stop
+    @1:10 byte=10
+ERROR 35 'parsing aborted' @1:10
+=== stop before parsing
+stop -> 0 code=44
+=== re-entrant parse
+start r; nested XML_Parse -> 0
+end r
+    @1:4 byte=4
+OK
+=== parse after final
+start r ud=U spec=0
+    @1:0 byte=0
+end r
+    @1:4 byte=4
+OK
+ERROR 36 'parsing finished' @1:4
+=== GetBuffer/ParseBuffer in chunks
+start r ud=U spec=2 [a=1]
+    @1:0 byte=0
+text [h]
+text [ello]
+start b ud=U spec=0
+    @1:14 byte=14
+end b
+    @1:18 byte=18
+text [wo]
+text [rld]
+end r
+    @1:23 byte=23
+OK
+=== unknown encoding via map
+unknown-encoding x-test data=D
+text [Ąz]
+OK
+=== byte invalid in map
+unknown-encoding x-test data=D
+ERROR 4 'not well-formed (invalid token)' @1:42
+=== handler refuses encoding
+ERROR 18 'unknown encoding' @1:30
+=== no handler for encoding
+ERROR 18 'unknown encoding' @1:30
+=== protocol encoding overrides declaration
+text [café]
+OK
+=== memory suite for content models
+doctype d sys=(null) pub=(null) internal=1
+element d CHOICE(NAME:a NAME:b)+
+element a EMPTY
+end-doctype
+start d ud=U spec=0
+    @1:52 byte=52
+end d
+    @1:56 byte=56
+OK
+content models balanced: yes
+=== settings
+deferral(1) -> 1 deferral(2) -> 0
+max amp 0.5 -> 0, 50 -> 1, threshold -> 1
+hash salt -> 1
+XML_GetUserData macro reads user data: yes
+=== amplification limit
+ERROR 43 'limit on input amplification factor (from DTD and entities) breached' @1:166
+=== errors and version
+ErrorString(0)=(null) ErrorString(9999)=(null)
+1 out of memory
+2 syntax error
+3 no element found
+4 not well-formed (invalid token)
+5 unclosed token
+6 partial character
+7 mismatched tag
+8 duplicate attribute
+9 junk after document element
+10 illegal parameter entity reference
+11 undefined entity
+12 recursive entity reference
+13 asynchronous entity
+14 reference to invalid character number
+15 reference to binary entity
+16 reference to external entity in attribute
+17 XML or text declaration not at start of entity
+18 unknown encoding
+19 encoding specified in XML declaration is incorrect
+20 unclosed CDATA section
+21 error in processing external entity reference
+22 document is not standalone
+23 unexpected parser state - please send a bug report
+24 entity declared in parameter entity
+25 requested feature requires XML_DTD support in Expat
+26 cannot change setting once parsing has begun
+27 unbound prefix
+28 must not undeclare prefix
+29 incomplete markup in parameter entity
+30 XML declaration not well-formed
+31 text declaration not well-formed
+32 illegal character(s) in public id
+33 parser suspended
+34 parser not suspended
+35 parsing aborted
+36 parsing finished
+37 cannot suspend in external parameter entity
+38 reserved prefix (xml) must not be undeclared or bound to another namespace name
+39 reserved prefix (xmlns) must not be declared or undeclared
+40 prefix must not be bound to one of the reserved namespace names
+41 invalid argument
+42 a successful prior call to function XML_GetBuffer is required
+43 limit on input amplification factor (from DTD and entities) breached
+44 parser not started
