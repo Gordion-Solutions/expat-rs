@@ -100,7 +100,9 @@ impl Namespaces {
                 Ok(())
             }
             Event::ProcessingInstruction { ref target, .. } if target.contains(':') => {
-                Err(error(pos, ErrorKind::InvalidToken, format!("processing instruction target {target:?} contains a colon")))
+                // Reported at the colon, as libexpat does.
+                let colon = pos.advance("<?").advance(&target[..target.find(':').unwrap_or(0)]);
+                Err(error(colon, ErrorKind::InvalidToken, format!("processing instruction target {target:?} contains a colon")))
             }
             Event::NotationDecl { ref name, .. } if name.contains(':') => {
                 Err(error(pos, ErrorKind::InvalidToken, format!("notation name {name:?} contains a colon")))

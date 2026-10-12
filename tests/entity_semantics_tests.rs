@@ -167,7 +167,8 @@ fn loader_failure_is_an_error() {
 #[test]
 fn parser_errors_report_real_positions() {
     match parse("<a>\n  <b></c>\n</a>") {
-        Err(XmlError::NotWellFormed { pos, .. }) => assert_eq!((pos.line, pos.column), (2, 6)),
+        // At the end tag's name, as libexpat reports it.
+        Err(XmlError::NotWellFormed { pos, .. }) => assert_eq!((pos.line, pos.column), (2, 8)),
         other => panic!("expected mismatched end tag, got {other:?}"),
     }
     match parse("<d>\n\n  &nope;</d>") {

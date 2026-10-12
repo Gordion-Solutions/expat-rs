@@ -11,7 +11,7 @@ mod dtd;
 
 use crate::entities::Dtd;
 use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
-use crate::error::{ErrorKind, Position, Result, XmlError};
+use crate::error::{line_breaks, ErrorKind, Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
 /// Low-level tokeniser: turns a document into [`Token`]s, checking lexical
@@ -83,6 +83,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// The position `n` bytes ahead, which must be ASCII and not line
+    /// ends: for errors at the character that makes a construct invalid.
+    fn ahead(&self, n: usize) -> Position {
+        Position { column: self.pos.column + n as u32, byte_offset: self.pos.byte_offset + n, ..self.pos }
+    }
+
     /// Current position: where the next token starts.
     pub fn position(&self) -> Position {
         self.pos
@@ -150,41 +156,33 @@ impl<'a> Lexer<'a> {
     /// from the current position.
     fn position_at(&self, byte_offset: usize) -> Position {
         let before = &self.src[..byte_offset];
-        let line = 1 + before.iter().filter(|&&b| b == b'\n').count() as u32;
+        let (breaks, after_last) = line_breaks(false, before);
         // A byte order mark isn't part of the document: line 1 starts after it.
         let bom = if self.doc_start == usize::MAX { 0 } else { self.doc_start };
-        let line_start = before.iter().rposition(|&b| b == b'\n').map_or(bom, |i| i + 1);
+        let line_start = if breaks == 0 { bom.min(byte_offset) } else { after_last };
         let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
-        Position { line, column, byte_offset }
+        Position { line: 1 + breaks, column, byte_offset }
+    }
+
+    /// Whether the byte before `offset` is `\r` (so a `\n` there continues
+    /// a line break already counted).
+    fn after_cr(&self, offset: usize) -> bool {
+        offset > 0 && self.src[offset - 1] == b'\r'
     }
 
     /// Advance past one byte, updating line/column. Columns count
     /// characters, so UTF-8 continuation bytes don't advance the column.
     fn bump(&mut self) {
-        let b = self.src[self.pos.byte_offset];
-        self.pos.byte_offset += 1;
-        if b == b'\n' {
-            self.pos.line += 1;
-            self.pos.column = 1;
-        } else if b & 0xC0 != 0x80 {
-            self.pos.column += 1;
-        }
+        let at = self.pos.byte_offset;
+        self.pos = self.pos.advance_bytes(self.after_cr(at), &self.src[at..at + 1]);
     }
 
     /// Move to `end` (≥ the current offset, on a character boundary),
     /// updating line and column for everything passed over: the same rules
     /// as `bump`, applied to the whole run at once.
     fn advance_to(&mut self, end: usize) {
-        let run = &self.src[self.pos.byte_offset..end];
-        let chars = |s: &[u8]| s.iter().filter(|&&b| b & 0xC0 != 0x80).count() as u32;
-        match run.iter().rposition(|&b| b == b'\n') {
-            Some(last_nl) => {
-                self.pos.line += run.iter().filter(|&&b| b == b'\n').count() as u32;
-                self.pos.column = 1 + chars(&run[last_nl + 1..]);
-            }
-            None => self.pos.column += chars(run),
-        }
-        self.pos.byte_offset = end;
+        let at = self.pos.byte_offset;
+        self.pos = self.pos.advance_bytes(self.after_cr(at), &self.src[at..end]);
     }
 
     /// Advance to the next byte before `limit` for which `stop` holds and
@@ -259,15 +257,8 @@ impl<'a> Lexer<'a> {
 
     /// Advance past one Unicode codepoint by its UTF-8 byte length.
     fn bump_char(&mut self, byte_len: usize) {
-        // \n is single-byte in UTF-8, so newline tracking works at byte level.
-        let is_newline = byte_len == 1 && self.src[self.pos.byte_offset] == b'\n';
-        self.pos.byte_offset += byte_len;
-        if is_newline {
-            self.pos.line += 1;
-            self.pos.column = 1;
-        } else {
-            self.pos.column += 1;
-        }
+        let at = self.pos.byte_offset;
+        self.pos = self.pos.advance_bytes(self.after_cr(at), &self.src[at..at + byte_len]);
     }
 
     /// Scan a Name per §2.3 [Production 5]. Honours full Unicode
@@ -338,8 +329,9 @@ impl<'a> Lexer<'a> {
                 // within comments." If we see -- followed by anything other
                 // than > we error.
                 if self.peek(2) != Some(b'>') {
+                    // Reported at the character after `--`, as libexpat does.
                     return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
-                        pos: self.pos,
+                        pos: self.ahead(2),
                         reason: "'--' not allowed within a comment".into(),
                     });
                 }
@@ -405,7 +397,15 @@ impl<'a> Lexer<'a> {
                 return Err(invalid(self, bad));
             }
         }
-        let tok = self.scan_token()?;
+        let start = self.pos;
+        let tok = self.scan_token().map_err(|e| match e {
+            // Input ran out inside a construct: reported where the
+            // construct starts, as libexpat does.
+            XmlError::UnexpectedEof { context, .. } if e.kind() == ErrorKind::UnclosedToken => {
+                XmlError::UnexpectedEof { pos: start, context }
+            }
+            e => e,
+        })?;
         if let Some(bad @ (offset, _)) = self.first_invalid {
             if offset < self.pos.byte_offset {
                 return Err(invalid(self, bad));
@@ -455,8 +455,15 @@ impl<'a> Lexer<'a> {
                 } else if self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE") {
                     self.scan_doctype()
                 } else {
+                    // Reported where the input stops matching any of them.
+                    let rest = &self.src[self.pos.byte_offset..];
+                    let matched = [&b"<!--"[..], b"<![CDATA[", b"<!DOCTYPE"]
+                        .iter()
+                        .map(|k| k.iter().zip(rest).take_while(|(a, b)| a == b).count())
+                        .max()
+                        .unwrap_or(0);
                     Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
-                        pos: self.pos, reason: "unrecognised <! construct".into(),
+                        pos: self.ahead(matched), reason: "unrecognised <! construct".into(),
                     })
                 }
             }
@@ -471,7 +478,9 @@ impl<'a> Lexer<'a> {
                 } else if target.eq_ignore_ascii_case("xml") {
                     Err(XmlError::NotWellFormed {
                         kind: if target == "xml" { ErrorKind::MisplacedXmlPi } else { ErrorKind::InvalidToken },
-                        pos: self.pos,
+                        // A misplaced declaration at its start, a reserved
+                        // target after it (as libexpat reports them).
+                        pos: if target == "xml" { self.position_at(start) } else { self.pos },
                         reason: if target == "xml" {
                             "XML declaration allowed only at the start of the document".into()
                         } else {
@@ -521,8 +530,9 @@ impl<'a> Lexer<'a> {
                     }
                     self.bump();
                     self.skip_whitespace();
+                    let value_pos = self.ahead(1); // inside the quote
                     let value = self.scan_attr_value()?;
-                    attributes.push(Attr { name: aname, value, pos: attr_pos });
+                    attributes.push(Attr { name: aname, value, pos: attr_pos, value_pos });
                 }
                 Some(c) => return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
                     pos: self.pos,
@@ -552,7 +562,7 @@ impl<'a> Lexer<'a> {
             return Err(not_wf(self.pos, "XML declaration must start with version"));
         }
         self.scan_eq()?;
-        let version_pos = self.pos;
+        let version_pos = self.ahead(1); // inside the quote
         let version = self.scan_attr_value()?;
         if !self.is_valid_version(version) {
             return Err(not_wf(version_pos, &format!("invalid XML version number {version:?}")));
@@ -562,7 +572,7 @@ impl<'a> Lexer<'a> {
         let mut encoding = None;
         if had_space && self.try_keyword(b"encoding") {
             self.scan_eq()?;
-            let enc_pos = self.pos;
+            let enc_pos = self.ahead(1);
             let name = self.scan_attr_value()?;
             if !is_valid_enc_name(name) {
                 return Err(not_wf(enc_pos, &format!("invalid encoding name {name:?}")));
@@ -574,7 +584,7 @@ impl<'a> Lexer<'a> {
         let mut standalone = None;
         if had_space && self.try_keyword(b"standalone") {
             self.scan_eq()?;
-            let sd_pos = self.pos;
+            let sd_pos = self.ahead(1);
             standalone = Some(match self.scan_attr_value()? {
                 "yes" => true,
                 "no"  => false,
@@ -644,8 +654,9 @@ impl<'a> Lexer<'a> {
                 if self.pos.byte_offset > start {
                     break;
                 }
+                // Reported at the '>', as libexpat does.
                 return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
-                    pos: self.pos,
+                    pos: self.ahead(2),
                     reason: "']]>' not allowed in character data".into(),
                 });
             }
@@ -658,25 +669,35 @@ impl<'a> Lexer<'a> {
     /// Reference per §4.1 [Productions 66–68]: `&name;` or `&#nnn;` / `&#xhh;`.
     fn scan_reference(&mut self) -> Result<Token<'a>> {
         debug_assert_eq!(self.current(), Some(b'&'));
+        let ref_pos = self.pos;
         self.bump();
         if self.current() == Some(b'#') {
             self.bump();
             let body_start = self.pos.byte_offset;
-            while let Some(c) = self.current() {
-                if c == b';' { break; }
-                if !(c.is_ascii_alphanumeric()) {
-                    return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
-                        pos: self.pos,
-                        reason: format!("invalid character {:?} in numeric character reference", c as char),
-                    });
-                }
+            let hex = self.current() == Some(b'x');
+            if hex {
                 self.bump();
             }
-            if self.current() != Some(b';') {
-                return Err(self.syntax_error("expected ';' to close character reference"));
+            let digits_start = self.pos.byte_offset;
+            // A malformed reference is reported at its first wrong
+            // character, as libexpat does.
+            loop {
+                match self.current() {
+                    Some(b';') if self.pos.byte_offset > digits_start => break,
+                    Some(c) if (hex && c.is_ascii_hexdigit()) || (!hex && c.is_ascii_digit()) => self.bump(),
+                    Some(c) => {
+                        return Err(XmlError::NotWellFormed { kind: ErrorKind::InvalidToken,
+                            pos: self.pos,
+                            reason: format!("invalid character {:?} in numeric character reference", c as char),
+                        });
+                    }
+                    None => return Err(self.syntax_error("expected ';' to close character reference")),
+                }
             }
             let body = self.slice(body_start);
-            let c = decode_char_ref(body).map_err(|(kind, reason)| XmlError::NotWellFormed { kind, pos: self.pos, reason })?;
+            // A reference to a character that isn't allowed is reported at
+            // the reference.
+            let c = decode_char_ref(body).map_err(|(kind, reason)| XmlError::NotWellFormed { kind, pos: ref_pos, reason })?;
             self.bump();
             Ok(Token::CharRef(c))
         } else {

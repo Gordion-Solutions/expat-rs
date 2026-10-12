@@ -15,6 +15,26 @@ fn error(kind: ErrorKind, reason: String) -> XmlError {
     XmlError::Encoding { pos: Position::start(), kind, reason }
 }
 
+fn error_at(pos: Position, kind: ErrorKind, reason: String) -> XmlError {
+    XmlError::Encoding { pos, kind, reason }
+}
+
+/// The position just after decoded `prefix` of the document (a leading
+/// byte order mark takes no column, as in the lexer).
+fn position_after(prefix: &str) -> Position {
+    let body = prefix.strip_prefix('\u{FEFF}').unwrap_or(prefix);
+    Position { byte_offset: prefix.len(), ..Position::start().advance(body) }
+}
+
+/// Where the encoding name declared in `text` starts (for errors about it,
+/// reported there as libexpat does), and the name.
+fn declared_encoding_at(text: &str) -> Option<(Position, &str)> {
+    let name = declared_encoding(text)?;
+    // `name` is a slice of `text`, so its offset is the pointer difference.
+    let offset = name.as_ptr() as usize - text.as_ptr() as usize;
+    Some((position_after(&text[..offset]), name))
+}
+
 /// Decode an XML document or external parsed entity to text.
 ///
 /// The encoding comes from the byte order mark, or failing that from the
@@ -47,8 +67,10 @@ fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<Cow<'_, str>> 
 
 /// UTF-16 text must not declare an 8-bit encoding (§4.3.3).
 fn check_utf16_declaration(text: &str) -> Result<()> {
-    match declared_encoding(text) {
-        Some(enc) if !is_utf16(enc) => Err(error(ErrorKind::IncorrectEncoding, format!("document is UTF-16 but declares encoding {enc:?}"))),
+    match declared_encoding_at(text) {
+        Some((pos, enc)) if !is_utf16(enc) => {
+            Err(error_at(pos, ErrorKind::IncorrectEncoding, format!("document is UTF-16 but declares encoding {enc:?}")))
+        }
         _ => Ok(()),
     }
 }
@@ -66,28 +88,35 @@ enum Kind8 {
 fn choose_8bit(bytes: &[u8]) -> Result<Kind8> {
     match choose_8bit_or_unknown(bytes)? {
         Ok(kind) => Ok(kind),
-        Err(name) => Err(error(ErrorKind::UnknownEncoding, format!("unsupported encoding {name:?}"))),
+        Err((name, pos)) => Err(unknown_encoding(&name, pos)),
     }
 }
 
+fn unknown_encoding(name: &str, pos: Position) -> XmlError {
+    error_at(pos, ErrorKind::UnknownEncoding, format!("unsupported encoding {name:?}"))
+}
+
 /// As `choose_8bit`, but an encoding name it doesn't support comes back as
-/// `Err(name)` for the caller to resolve (see `ByteMap`).
-fn choose_8bit_or_unknown(bytes: &[u8]) -> Result<std::result::Result<Kind8, String>> {
+/// `Err((name, where it is declared))` for the caller to resolve (see
+/// `ByteMap`).
+fn choose_8bit_or_unknown(bytes: &[u8]) -> Result<std::result::Result<Kind8, (String, Position)>> {
     let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     // The declaration itself is ASCII in every supported 8-bit encoding.
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]);
     // A name that isn't a valid EncName (§4.3.3 [81]) is a malformed
     // declaration, for the lexer to report; decode as UTF-8 meanwhile.
-    let declared = declared_encoding(head.trim_start_matches('\u{FEFF}'))
-        .filter(|name| is_enc_name(name))
-        .map(str::to_ascii_uppercase);
+    let written = declared_encoding_at(&head).filter(|(_, name)| is_enc_name(name));
+    let pos = written.map_or(Position::start(), |(pos, _)| pos);
+    let written = written.map(|(_, name)| name);
+    let declared = written.map(str::to_ascii_uppercase);
     match declared.as_deref() {
         None | Some("UTF-8") => Ok(Ok(Kind8::Utf8)),
-        Some(enc) if has_bom => Err(error(ErrorKind::IncorrectEncoding, format!("document has a UTF-8 byte order mark but declares encoding {enc:?}"))),
-        Some(enc) if is_utf16(enc) => Err(error(ErrorKind::IncorrectEncoding, "UTF-16 documents must begin with a byte order mark".into())),
+        Some(enc) if has_bom => Err(error_at(pos, ErrorKind::IncorrectEncoding, format!("document has a UTF-8 byte order mark but declares encoding {enc:?}"))),
+        Some(enc) if is_utf16(enc) => Err(error_at(pos, ErrorKind::IncorrectEncoding, "UTF-16 documents must begin with a byte order mark".into())),
         Some("US-ASCII" | "ASCII") => Ok(Ok(Kind8::Ascii)),
         Some("ISO-8859-1" | "ISO_8859-1" | "LATIN1") => Ok(Ok(Kind8::Latin1)),
-        Some(enc) => Ok(Err(enc.to_string())),
+        // Unknown: the name as written, as libexpat passes it on.
+        Some(_) => Ok(Err((written.unwrap_or_default().to_string(), pos))),
     }
 }
 
@@ -102,7 +131,14 @@ fn decode_8bit(bytes: &[u8]) -> Result<Cow<'_, str>> {
     match choose_8bit(bytes)? {
         Kind8::Utf8 => utf8(bytes),
         Kind8::Ascii => {
-            check_ascii(bytes, 0)?;
+            check_ascii(bytes, 0).map_err(|e| match e {
+                // Up to the bad byte the input is ASCII, so valid UTF-8.
+                XmlError::Encoding { kind, reason, .. } => {
+                    let at = bytes.iter().position(|&b| b >= 0x80).unwrap_or(0);
+                    error_at(position_after(std::str::from_utf8(&bytes[..at]).unwrap_or("")), kind, reason)
+                }
+                e => e,
+            })?;
             utf8(bytes)
         }
         Kind8::Latin1 => Ok(Cow::Owned(bytes.iter().map(|&b| b as char).collect())),
@@ -115,7 +151,9 @@ fn utf8(bytes: &[u8]) -> Result<Cow<'_, str>> {
         .map_err(|e| {
             // No error length: the input just stops mid-character.
             let kind = if e.error_len().is_none() { ErrorKind::PartialChar } else { ErrorKind::InvalidToken };
-            error(kind, format!("invalid UTF-8 at offset {}", e.valid_up_to()))
+            // Reported where the bad byte is, as libexpat does.
+            let before = std::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or("");
+            error_at(position_after(before), kind, format!("invalid UTF-8 at offset {}", e.valid_up_to()))
         })
 }
 
@@ -191,7 +229,7 @@ impl StreamDecoder {
     /// name the resolver passed to [`decode_with`](Self::decode_with)
     /// knows. Mirrors libexpat's protocol encoding (`XML_SetEncoding`).
     pub fn with_encoding(encoding: &str) -> Self {
-        Self { forced: Some(encoding.to_ascii_uppercase()), ..Self::default() }
+        Self { forced: Some(encoding.to_string()), ..Self::default() }
     }
 
     /// Decode `bytes` onto the end of `out`. With `last`, this is the end
@@ -222,6 +260,8 @@ impl StreamDecoder {
         let start = out.len();
         let used = match kind {
             Kind::Map(map) => {
+                // Characters before a bad byte stay in `out`, for the caller
+                // to parse before reporting it.
                 for (i, &b) in self.pending.iter().enumerate() {
                     match map[b as usize] {
                         Some(c) => out.push(c),
@@ -236,15 +276,22 @@ impl StreamDecoder {
                 self.pending.len()
             }
             &Kind::Bit8(k) => {
-                let valid = match std::str::from_utf8(&self.pending) {
-                    Ok(s) => s.len(),
-                    Err(e) if e.error_len().is_some() => {
-                        return Err(error(ErrorKind::InvalidToken, format!("invalid UTF-8 at offset {}", self.offset + e.valid_up_to())));
-                    }
-                    Err(e) => e.valid_up_to(), // a character continues in the next chunk
+                let (valid, bad) = match std::str::from_utf8(&self.pending) {
+                    Ok(s) => (s.len(), None),
+                    Err(e) if e.error_len().is_some() => (e.valid_up_to(), Some(
+                        error(ErrorKind::InvalidToken, format!("invalid UTF-8 at offset {}", self.offset + e.valid_up_to()))
+                    )),
+                    Err(e) => (e.valid_up_to(), None), // a character continues in the next chunk
                 };
-                if k == Kind8::Ascii {
-                    check_ascii(&self.pending[..valid], self.offset)?;
+                // As for byte maps: what comes before a bad byte is output
+                // first.
+                let (valid, bad) = match (k == Kind8::Ascii).then(|| self.pending[..valid].iter().position(|&b| b >= 0x80)).flatten() {
+                    Some(i) => (i, Some(check_ascii(&self.pending[i..i + 1], self.offset + i).unwrap_err())),
+                    None => (valid, bad),
+                };
+                if let Some(bad) = bad {
+                    out.push_str(std::str::from_utf8(&self.pending[..valid]).expect("validated above"));
+                    return Err(bad);
                 }
                 out.push_str(std::str::from_utf8(&self.pending[..valid]).expect("validated above"));
                 valid
@@ -285,24 +332,22 @@ impl StreamDecoder {
     fn detect(&mut self, last: bool, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>) -> Result<Option<Kind>> {
         let p = &self.pending[..];
         let utf16 = |be: bool| -> Kind { Kind::Utf16(if be { u16::from_be_bytes } else { u16::from_le_bytes }) };
-        let resolve = |name: &str, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>| {
-            unknown(name)
-                .map(Kind::Map)
-                .ok_or_else(|| error(ErrorKind::UnknownEncoding, format!("unsupported encoding {name:?}")))
+        let resolve = |name: &str, pos: Position, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>| {
+            unknown(name).map(Kind::Map).ok_or_else(|| unknown_encoding(name, pos))
         };
         if let Some(forced) = self.forced.clone() {
             // The caller's choice wins over detection and the declaration.
             if p.len() < 2 && !last {
                 return Ok(None);
             }
-            return Ok(Some(match forced.as_str() {
+            return Ok(Some(match forced.to_ascii_uppercase().as_str() {
                 "UTF-8" => Kind::Bit8(Kind8::Utf8),
                 "US-ASCII" | "ASCII" => Kind::Bit8(Kind8::Ascii),
                 "ISO-8859-1" | "ISO_8859-1" | "LATIN1" => Kind::Bit8(Kind8::Latin1),
                 "UTF-16LE" => utf16(false),
                 "UTF-16BE" => utf16(true),
                 "UTF-16" => utf16(!p.starts_with(&[0xFF, 0xFE])),
-                other => resolve(other, unknown)?,
+                _ => resolve(&forced, Position::start(), unknown)?,
             }));
         }
         let kind = match p {
@@ -325,7 +370,7 @@ impl StreamDecoder {
                 }
                 match choose_8bit_or_unknown(p)? {
                     Ok(kind) => Kind::Bit8(kind),
-                    Err(name) => resolve(&name, unknown)?,
+                    Err((name, pos)) => resolve(&name, pos, unknown)?,
                 }
             }
         };

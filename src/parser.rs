@@ -19,7 +19,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
-use crate::chars::Edition;
+use crate::chars::{is_name_char, Edition};
 use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
@@ -152,6 +152,11 @@ impl<'l> State<'l> {
     /// Content where only whitespace, comments and PIs may appear: junk
     /// after the root element, an invalid token before it (as libexpat
     /// classifies them).
+    /// Whether parsing is still before the root element.
+    pub(crate) fn before_root(&self) -> bool {
+        self.phase == Phase::Prolog
+    }
+
     fn outside_root(&self, reason: &str) -> XmlError {
         let kind = if self.phase == Phase::Epilog { ErrorKind::JunkAfterDocElement } else { ErrorKind::InvalidToken };
         self.not_wf(kind, reason)
@@ -368,10 +373,17 @@ impl<'l> State<'l> {
                 self.emit(Event::EndElement(Cow::Borrowed(name)), out)
             }
             Token::EndTag(name) => {
+                // Positions as libexpat reports them: a stray end tag at the
+                // '/', a mismatched one at its name.
+                let after = |n: usize| Position { column: self.last_pos.column + n as u32, byte_offset: self.last_pos.byte_offset + n, ..self.last_pos };
                 match self.stack.top() {
-                    None => return Err(self.outside_root(&format!("unexpected end tag </{name}> with no matching start"))),
+                    None => {
+                        return Err(XmlError::NotWellFormed { pos: after(1), kind: ErrorKind::InvalidToken,
+                            reason: format!("unexpected end tag </{name}> with no matching start") });
+                    }
                     Some(top) if top != name => {
-                        return Err(self.not_wf(ErrorKind::TagMismatch, format!("end tag </{name}> does not match start tag <{top}>")));
+                        return Err(XmlError::NotWellFormed { pos: after(2), kind: ErrorKind::TagMismatch,
+                            reason: format!("end tag </{name}> does not match start tag <{top}>") });
                     }
                     Some(_) => {}
                 }
@@ -381,8 +393,13 @@ impl<'l> State<'l> {
             Token::Text(s) => {
                 // Per §2.1: character data only inside the root element.
                 if self.stack.is_empty() {
-                    if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
-                        // Report the first character that isn't whitespace.
+                    if let Some(mut i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
+                        // Report the first character that isn't whitespace;
+                        // before the root, the first after a run of name
+                        // characters there (libexpat reads one as a name).
+                        if self.phase != Phase::Epilog {
+                            i += s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
+                        }
                         self.last_pos = self.last_pos.advance(&s[..i]);
                         return Err(self.outside_root("non-whitespace text outside the root element"));
                     }

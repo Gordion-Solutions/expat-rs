@@ -93,7 +93,7 @@ fn unknown_encoding_resolved_by_byte_map() {
         Some(cp1252())
     })).unwrap();
     assert_eq!(got, "€ café");
-    assert_eq!(asked, ["WINDOWS-1252"], "asked once, with the declared name");
+    assert_eq!(asked, ["windows-1252"], "asked once, with the name as declared");
     for chunk in [1, 7] {
         let got = stream_text(CP1252_DOC, chunk, StreamParser::new().with_unknown_encoding(|_| Some(cp1252()))).unwrap();
         assert_eq!(got, "€ café", "chunk {chunk}");

@@ -93,6 +93,9 @@ pub struct Attr<'a> {
     pub value: &'a str,
     /// The opening position of the attribute name, for error reporting.
     pub pos: Position,
+    /// The position of the value's first character (just inside the
+    /// opening quote), for errors in the value.
+    pub value_pos: Position,
 }
 
 /// XML declaration components per §2.8 [Production 23–25].
