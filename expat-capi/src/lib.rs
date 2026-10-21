@@ -217,6 +217,24 @@ pub struct Shim {
     id_attributes: RefCell<std::collections::HashMap<String, String>>,
     /// `XML_GetIdAttributeIndex` for the current start tag.
     id_index: Cell<c_int>,
+    /// `standalone="yes"` in the XML declaration.
+    standalone: Cell<bool>,
+    /// The first bytes of input, until it is known whether they are a
+    /// byte order mark, and whether they were (libexpat counts a byte
+    /// order mark as a column on line 1; expat-rs doesn't).
+    head: RefCell<Vec<u8>>,
+    bom: Cell<Option<bool>>,
+    /// The input is UTF-16 (from a byte order mark or a zero byte at the
+    /// start, as libexpat detects it).
+    utf16: Cell<bool>,
+    /// Character data is delivered in pieces of at most `TEXT_PIECE` bytes:
+    /// libexpat does this for input it has to convert (anything but UTF-8
+    /// and US-ASCII).
+    chunk_text: Cell<bool>,
+    /// Error to report when a handler stops parsing (`XML_StopParser` is
+    /// XML_ERROR_ABORTED; a not-standalone handler returning 0 is
+    /// XML_ERROR_NOT_STANDALONE).
+    stop_error: Cell<XML_Error>,
     /// Namespace separator from `XML_ParserCreateNS` (`Some(0)`: names are
     /// concatenated without one).
     ns_sep: Option<u8>,
@@ -264,6 +282,12 @@ impl Shim {
             current_raw: RefCell::new(String::new()),
             id_attributes: RefCell::new(std::collections::HashMap::new()),
             id_index: Cell::new(-1),
+            standalone: Cell::new(false),
+            head: RefCell::new(Vec::new()),
+            bom: Cell::new(None),
+            utf16: Cell::new(false),
+            chunk_text: Cell::new(false),
+            stop_error: Cell::new(XML_ERROR_ABORTED),
             ns_sep,
             ns_triplets: Cell::new(false),
             base: RefCell::new(None),
@@ -315,6 +339,7 @@ impl Shim {
         if let Some(enc) = self.encoding.borrow().as_deref() {
             p = p.with_encoding(enc);
         }
+        self.chunk_text.set(self.converts(None));
         let (handler, data) = self.unknown_encoding.get();
         if let Some(handler) = handler {
             p = p.with_unknown_encoding(move |name| byte_map_from_c(handler, data, name));
@@ -337,6 +362,7 @@ impl Shim {
             // XML_Parse from inside one of this parser's own handlers.
             return XML_STATUS_ERROR;
         };
+        self.note_bom(input, is_final);
         let parser = core.get_or_insert_with(|| self.make_parser());
         self.status.set(Status::Parsing);
         let mut deliver = |l: Located<'_>| {
@@ -359,7 +385,7 @@ impl Shim {
         drop(core);
         if self.stop_requested.get() {
             self.pos.set(self.token_end.get());
-            self.error.set(XML_ERROR_ABORTED);
+            self.error.set(self.stop_error.get());
             self.status.set(Status::Failed);
             return XML_STATUS_ERROR;
         }
@@ -378,6 +404,45 @@ impl Shim {
         }
     }
 
+    /// Whether libexpat would convert this input to UTF-8 (anything but
+    /// UTF-8 and US-ASCII), given the declared encoding, if any.
+    fn converts(&self, declared: Option<&str>) -> bool {
+        let forced = self.encoding.borrow().clone();
+        match forced.as_deref().or(declared) {
+            _ if self.utf16.get() && forced.is_none() => true,
+            None => self.utf16.get(),
+            Some(enc) => !["UTF-8", "US-ASCII", "ASCII"].iter().any(|n| enc.eq_ignore_ascii_case(n)),
+        }
+    }
+
+    /// Watch the first bytes of input for a byte order mark.
+    fn note_bom(&self, input: &[u8], is_final: bool) {
+        if self.bom.get().is_some() {
+            return;
+        }
+        let Ok(mut head) = self.head.try_borrow_mut() else { return };
+        let want = 3usize.saturating_sub(head.len());
+        head.extend(input.iter().take(want));
+        let utf8 = [0xEF, 0xBB, 0xBF];
+        if let [0xFF, 0xFE, ..] | [0xFE, 0xFF, ..] | [0x00, _, ..] | [_, 0x00, ..] = head.as_slice() {
+            self.utf16.set(true);
+        }
+        let decided = match head.as_slice() {
+            [0xFF, 0xFE, ..] | [0xFE, 0xFF, ..] => Some(true),
+            h if h.len() >= 3 || is_final => Some(h.starts_with(&utf8)),
+            h if utf8.starts_with(h) => None, // may still be one
+            _ => Some(false),
+        };
+        self.bom.set(decided);
+    }
+
+    /// libexpat's column for `pos`: 0-based, and counting a byte order mark
+    /// as a column on line 1.
+    fn column(&self, pos: Position) -> XML_Size {
+        let bom = (pos.line == 1 && self.bom.get() == Some(true)) as u32;
+        (pos.column.saturating_sub(1) + bom) as XML_Size
+    }
+
     fn fail(&self, e: &XmlError) {
         self.pos.set(e.position());
         self.error.set(error_code(e.kind()));
@@ -394,21 +459,48 @@ fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *
     // `name` is a valid C string and `info` a valid, writable XML_Encoding
     // for the duration of the call.
     let ok = unsafe { handler(data, name.as_ptr(), &mut info) };
-    let map = (ok == XML_STATUS_OK).then(|| {
+    let map = (ok == XML_STATUS_OK && acceptable_map(&info.map)).then(|| {
         let mut map: ByteMap = Box::new([None; 256]);
         for (byte, &entry) in info.map.iter().enumerate() {
-            // Negative entries are invalid bytes or multi-byte lead bytes;
-            // multi-byte encodings (`convert`) aren't supported yet.
+            // -1 marks a byte that is invalid in the encoding.
             map[byte] = u32::try_from(entry).ok().and_then(char::from_u32);
         }
         map
     });
-    let multibyte = info.map.iter().any(|&e| e < -1);
     if let Some(release) = info.release {
         // SAFETY: release takes the data pointer the handler stored in info.
         unsafe { release(info.data) };
     }
-    if multibyte { None } else { map }
+    map
+}
+
+/// Largest piece of character data libexpat delivers for input it
+/// converts to UTF-8, in bytes.
+const TEXT_PIECE: usize = 1024;
+
+/// ASCII characters with a meaning in XML's syntax: whitespace, letters,
+/// digits and markup punctuation.
+const XML_SYNTAX_CHARS: &[u8] =
+    b"\t\n\r !\"#%&'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz|";
+
+/// Whether libexpat would accept an unknown-encoding handler's map: each
+/// of XML's syntax characters is its own byte and no other byte stands for
+/// one, and there are no multi-byte sequences (entries below -1), which
+/// would need the `convert` callback expat-capi doesn't support. Other
+/// maps are an unknown encoding. (Found by black-box tests of libexpat:
+/// remapping `$` or a control byte is accepted, `A`, `<` or LF is not.)
+fn acceptable_map(map: &[c_int; 256]) -> bool {
+    let is_syntax = |c: c_int| u8::try_from(c).is_ok_and(|c| XML_SYNTAX_CHARS.contains(&c));
+    map.iter().enumerate().all(|(byte, &entry)| {
+        let byte = byte as c_int;
+        if entry < -1 {
+            false // a multi-byte sequence
+        } else if is_syntax(byte) {
+            entry == byte // a syntax character must be its own byte
+        } else {
+            !is_syntax(entry) // and no other byte may stand for one
+        }
+    })
 }
 
 /// libexpat's error code for an expat-rs error kind.
@@ -526,6 +618,20 @@ impl Shim {
                 raw.clear();
                 raw.push_str(l.raw);
             }
+        }
+        match &l.event {
+            Event::XmlDecl(d) => {
+                self.standalone.set(d.standalone == Some(true));
+                self.chunk_text.set(self.converts(d.encoding));
+            }
+            // An external subset: libexpat asks before the DOCTYPE handler.
+            Event::Doctype { system_id, public_id, .. } if system_id.is_some() || public_id.is_some() => {
+                self.not_standalone();
+                if self.stop_requested.get() {
+                    return;
+                }
+            }
+            _ => {}
         }
         let h = &self.handlers;
         let ud = self.ud();
@@ -702,16 +808,19 @@ impl Shim {
                 let base = self.base.borrow().clone();
                 let (n, s, p, no) =
                     (cstr(&name), opt_cstr(system_id.as_deref()), opt_cstr(public_id.as_deref()), opt_cstr(notation.as_deref()));
-                if let Some(f) = h.entity_decl.get() {
+                // An unparsed (NDATA) entity goes to the unparsed-entity
+                // handler when there is one, as in libexpat; otherwise, like
+                // every other entity, to the entity handler.
+                if let (Some(f), Some(_)) = (h.unparsed_entity_decl.get(), &no) {
+                    // SAFETY: registered UnparsedEntityDeclHandler; valid C
+                    // strings (or null).
+                    unsafe { f(ud, n.as_ptr(), ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
+                } else if let Some(f) = h.entity_decl.get() {
                     let (vptr, vlen) = value.as_deref().map_or((ptr::null(), 0), |v| (v.as_ptr().cast(), v.len() as c_int));
                     // SAFETY: registered EntityDeclHandler; the value is
                     // valid for its length (not NUL-terminated, as in
                     // libexpat), the rest valid C strings or null.
                     unsafe { f(ud, n.as_ptr(), parameter as c_int, vptr, vlen, ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
-                } else if let (Some(f), Some(_)) = (h.unparsed_entity_decl.get(), &no) {
-                    // SAFETY: registered UnparsedEntityDeclHandler; valid C
-                    // strings (or null).
-                    unsafe { f(ud, n.as_ptr(), ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
                 }
             }
             Event::StartNamespace { prefix, uri } => {
@@ -730,6 +839,7 @@ impl Shim {
                     unsafe { f(ud, ptr_of(&p)) };
                 }
             }
+            Event::ParameterEntityRef(_) => self.not_standalone(),
             Event::SkippedEntity(name) => match h.skipped_entity.get() {
                 Some(f) => {
                     let n = cstr(&name);
@@ -750,6 +860,23 @@ impl Shim {
     /// piece is reported where it is in the source; text that came from an
     /// entity is all reported at the reference. Stops early if a handler
     /// calls `XML_StopParser`.
+    /// A reference the document's own content can't resolve (an external
+    /// subset, a parameter entity): unless it declared itself standalone,
+    /// libexpat asks the not-standalone handler whether to go on; 0 means
+    /// stop with XML_ERROR_NOT_STANDALONE.
+    fn not_standalone(&self) {
+        if self.standalone.get() {
+            return;
+        }
+        if let Some(f) = self.handlers.not_standalone.get() {
+            // SAFETY: registered NotStandaloneHandler.
+            if unsafe { f(self.ud()) } == 0 {
+                self.stop_error.set(XML_ERROR_NOT_STANDALONE);
+                self.stop_requested.set(true);
+            }
+        }
+    }
+
     fn character_data(&self, text: &str, raw: &str, start: Position) {
         let from_source = if raw.contains('\r') {
             raw.replace("\r\n", "\n").replace('\r', "\n") == text
@@ -810,15 +937,38 @@ impl Shim {
     }
 
     fn deliver_chars(&self, text: &str, raw: &str) {
+        if self.chunk_text.get() && text.len() > TEXT_PIECE {
+            // Split at character boundaries, as libexpat's conversion does.
+            let (mut rest_text, mut rest_raw) = (text, raw);
+            while !rest_text.is_empty() && !self.stop_requested.get() {
+                let mut cut = TEXT_PIECE.min(rest_text.len());
+                while !rest_text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                let (piece, after) = rest_text.split_at(cut);
+                // Raw text is the same as the text here (no line ends, no
+                // references); otherwise give the default handler all of it.
+                let (raw_piece, raw_after) = if rest_raw == rest_text { rest_raw.split_at(cut) } else { (rest_raw, "") };
+                self.deliver_piece(piece, raw_piece);
+                rest_text = after;
+                rest_raw = raw_after;
+            }
+            return;
+        }
+        self.deliver_piece(text, raw);
+    }
+
+    fn deliver_piece(&self, text: &str, raw: &str) {
         match self.handlers.character_data.get() {
             Some(f) => {
                 // SAFETY: registered CharacterDataHandler; `text` is valid
                 // for its length during the call.
                 unsafe { f(self.ud(), text.as_ptr().cast(), text.len() as c_int) };
             }
-            None => {
+            None if !raw.is_empty() => {
                 self.to_default(raw);
             }
+            None => {}
         }
     }
 
@@ -1012,6 +1162,7 @@ pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool)
             XML_STATUS_ERROR
         }
         Status::Parsing => {
+            p.stop_error.set(XML_ERROR_ABORTED);
             p.stop_requested.set(true);
             XML_STATUS_OK
         }
@@ -1042,7 +1193,7 @@ pub unsafe extern "C" fn XML_GetCurrentLineNumber(parser: XML_Parser) -> XML_Siz
 pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> XML_Size {
     // libexpat's columns are 0-based; expat-rs's are 1-based.
     // SAFETY: see `shim`.
-    unsafe { shim(parser) }.map_or(0, |p| p.pos.get().column.saturating_sub(1) as XML_Size)
+    unsafe { shim(parser) }.map_or(0, |p| p.column(p.pos.get()))
 }
 
 #[no_mangle]
