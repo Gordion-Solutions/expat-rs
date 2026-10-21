@@ -43,33 +43,48 @@ fn declared_encoding_at(text: &str) -> Option<(Position, &str)> {
 /// byte order mark is kept as a leading U+FEFF, which the lexer skips.
 pub fn decode(bytes: &[u8]) -> Result<Cow<'_, str>> {
     match bytes {
-        [0xFE, 0xFF, ..] => decode_utf16(bytes, u16::from_be_bytes),
-        [0xFF, 0xFE, ..] => decode_utf16(bytes, u16::from_le_bytes),
-        // No byte order mark, but '<?' in UTF-16 (Appendix F).
-        [0x00, 0x3C, 0x00, 0x3F, ..] => decode_utf16(bytes, u16::from_be_bytes),
-        [0x3C, 0x00, 0x3F, 0x00, ..] => decode_utf16(bytes, u16::from_le_bytes),
-        [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => Err(error(ErrorKind::UnknownEncoding, "UCS-4 input is not supported".into())),
+        [0xFE, 0xFF, ..] => decode_utf16(bytes, true),
+        [0xFF, 0xFE, ..] => decode_utf16(bytes, false),
+        // No byte order mark: as libexpat does, a zero first byte means
+        // big-endian UTF-16 and a zero second byte little-endian (this
+        // covers '<?' in UTF-16, Appendix F).
+        [0x00, ..] => decode_utf16(bytes, true),
+        [_, 0x00, ..] => decode_utf16(bytes, false),
         _ => decode_8bit(bytes),
     }
 }
 
-fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Result<Cow<'_, str>> {
-    if !bytes.len().is_multiple_of(2) {
-        return Err(error(ErrorKind::PartialChar, "UTF-16 input has an odd number of bytes".into()));
+/// The code unit reader for big-endian (`be`) or little-endian UTF-16.
+fn utf16_unit(be: bool) -> fn([u8; 2]) -> u16 {
+    if be { u16::from_be_bytes } else { u16::from_le_bytes }
+}
+
+fn decode_utf16(bytes: &[u8], be: bool) -> Result<Cow<'_, str>> {
+    let unit = utf16_unit(be);
+    let (pairs, odd) = bytes.as_chunks::<2>();
+    if !odd.is_empty() {
+        // libexpat reports a trailing odd byte as an unclosed token, after
+        // the characters before it.
+        let before: String = char::decode_utf16(pairs.iter().map(|&pair| unit(pair))).map(|c| c.unwrap_or('\u{FFFD}')).collect();
+        return Err(error_at(position_after(&before), ErrorKind::UnclosedToken, "UTF-16 input ends with an odd byte".into()));
     }
-    let units = bytes.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
+    let units = pairs.iter().map(|&pair| unit(pair));
     let text: String = char::decode_utf16(units)
         .collect::<std::result::Result<_, _>>()
         .map_err(|e| error(ErrorKind::InvalidToken, format!("invalid UTF-16: {e}")))?;
-    check_utf16_declaration(&text)?;
+    check_utf16_declaration(&text, be)?;
     Ok(Cow::Owned(text))
 }
 
 /// UTF-16 text must not declare an 8-bit encoding (§4.3.3).
-fn check_utf16_declaration(text: &str) -> Result<()> {
+fn check_utf16_declaration(text: &str, be: bool) -> Result<()> {
     match declared_encoding_at(text) {
-        Some((pos, enc)) if !is_utf16(enc) => {
-            Err(error_at(pos, ErrorKind::IncorrectEncoding, format!("document is UTF-16 but declares encoding {enc:?}")))
+        // "UTF-16" for either byte order, or the name of this byte order.
+        Some((pos, enc)) if !(enc.eq_ignore_ascii_case("UTF-16")
+            || enc.eq_ignore_ascii_case(if be { "UTF-16BE" } else { "UTF-16LE" })) =>
+        {
+            Err(error_at(pos, ErrorKind::IncorrectEncoding, format!(
+                "document is UTF-16{} but declares encoding {enc:?}", if be { "BE" } else { "LE" })))
         }
         _ => Ok(()),
     }
@@ -164,8 +179,9 @@ fn is_enc_name(name: &str) -> bool {
         && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// A UTF-16 encoding name: UTF-16, or one naming a byte order.
 fn is_utf16(enc: &str) -> bool {
-    enc.eq_ignore_ascii_case("UTF-16")
+    ["UTF-16", "UTF-16LE", "UTF-16BE"].iter().any(|name| enc.eq_ignore_ascii_case(name))
 }
 
 /// The `encoding` pseudo-attribute of a leading XML or text declaration,
@@ -195,7 +211,8 @@ pub type UnknownEncodingHandler<'l> = Box<dyn FnMut(&str) -> Option<ByteMap> + '
 #[derive(Clone)]
 enum Kind {
     Bit8(Kind8),
-    Utf16(fn([u8; 2]) -> u16),
+    /// UTF-16, big-endian if true.
+    Utf16(bool),
     Map(ByteMap),
 }
 
@@ -296,7 +313,8 @@ impl StreamDecoder {
                 out.push_str(std::str::from_utf8(&self.pending[..valid]).expect("validated above"));
                 valid
             }
-            &Kind::Utf16(unit) => {
+            &Kind::Utf16(be) => {
+                let unit = utf16_unit(be);
                 let mut n = self.pending.len() / 2 * 2;
                 // Keep a trailing high surrogate for its partner.
                 if n >= 2 && !last && (0xD800..0xDC00).contains(&unit([self.pending[n - 2], self.pending[n - 1]])) {
@@ -312,6 +330,10 @@ impl StreamDecoder {
         self.pending.drain(..used);
         self.offset += used;
         if last && !self.pending.is_empty() {
+            // libexpat calls a trailing odd byte of UTF-16 an unclosed token.
+            if let Some(Kind::Utf16(_)) = self.kind {
+                return Err(error(ErrorKind::UnclosedToken, "UTF-16 input ends with an odd byte".into()));
+            }
             return Err(error(ErrorKind::PartialChar, "input ends in the middle of a character".into()));
         }
         if let Some(head) = &mut self.utf16_head {
@@ -320,7 +342,7 @@ impl StreamDecoder {
             let undecided = body.starts_with("<?xml") && !body.contains("?>") && body.len() < 256
                 || "<?xml".starts_with(body);
             if !undecided || last {
-                check_utf16_declaration(head)?;
+                check_utf16_declaration(head, matches!(self.kind, Some(Kind::Utf16(true))))?;
                 self.utf16_head = None;
             }
         }
@@ -331,7 +353,7 @@ impl StreamDecoder {
     /// of it is needed first.
     fn detect(&mut self, last: bool, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>) -> Result<Option<Kind>> {
         let p = &self.pending[..];
-        let utf16 = |be: bool| -> Kind { Kind::Utf16(if be { u16::from_be_bytes } else { u16::from_le_bytes }) };
+        let utf16 = Kind::Utf16;
         let resolve = |name: &str, pos: Position, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>| {
             unknown(name).map(Kind::Map).ok_or_else(|| unknown_encoding(name, pos))
         };
@@ -354,9 +376,8 @@ impl StreamDecoder {
             [0xFE, 0xFF, ..] => utf16(true),
             [0xFF, 0xFE, ..] => utf16(false),
             _ if p.len() < 4 && !last => return Ok(None),
-            [0x00, 0x3C, 0x00, 0x3F, ..] => utf16(true),
-            [0x3C, 0x00, 0x3F, 0x00, ..] => utf16(false),
-            [0x00, 0x00, ..] | [_, 0x00, 0x00, ..] => return Err(error(ErrorKind::UnknownEncoding, "UCS-4 input is not supported".into())),
+            [0x00, ..] => utf16(true),
+            [_, 0x00, ..] => utf16(false),
             _ => {
                 let body = p.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(p);
                 let has_decl = body.starts_with(b"<?xml");

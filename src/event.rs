@@ -158,6 +158,13 @@ pub enum Event<'a> {
         prefix: Option<Cow<'a, str>>,
     },
 
+    /// A parameter-entity reference between declarations in the internal
+    /// subset (`%name;`), between `Doctype` and `EndDoctype`. Parameter
+    /// entities are not read, so per §5.1 entity and attribute-list
+    /// declarations after one are not processed. libexpat calls its
+    /// not-standalone handler at such a reference.
+    ParameterEntityRef(Cow<'a, str>),
+
     /// A reference in content to an entity whose text was not read: an
     /// external entity with no loader installed, or an undeclared entity
     /// where that is only a validity error. Mirrors libexpat's

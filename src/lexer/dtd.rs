@@ -130,9 +130,9 @@ impl<'a> Lexer<'a> {
     /// §4.1 [Production 69]: PEReference ::= '%' Name ';'
     fn scan_pe_reference(&mut self) -> Result<()> {
         self.bump(); // %
-        self.scan_name()?;
+        let name = self.scan_name()?.to_string();
         self.expect_byte(b';', "expected ';' to close parameter-entity reference")?;
-        self.dtd.decls.push(DtdDecl::PeRef);
+        self.dtd.decls.push(DtdDecl::PeRef(name));
         Ok(())
     }
 

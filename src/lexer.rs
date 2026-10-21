@@ -10,7 +10,7 @@
 mod dtd;
 
 use crate::entities::Dtd;
-use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, Edition};
+use crate::chars::{decode_char_ref, first_invalid_char, is_name_char, is_name_start_char, is_xml_char, Edition};
 use crate::error::{line_breaks, ErrorKind, Position, Result, XmlError};
 use crate::token::{Attr, Token, XmlDecl};
 
@@ -567,7 +567,27 @@ impl<'a> Lexer<'a> {
     ///
     /// The three pseudo-attributes are each preceded by required S and must
     /// appear in this order.
+    /// The XML declaration after `<?xml`. Errors are classified as libexpat
+    /// does: no `?>` ahead is an unclosed token, a character XML doesn't
+    /// allow an invalid token, anything else wrong inside it a malformed
+    /// declaration.
     fn scan_xmldecl_after_target(&mut self) -> Result<Token<'a>> {
+        if !self.src[self.pos.byte_offset..].windows(2).any(|w| w == b"?>") {
+            return Err(XmlError::UnexpectedEof { pos: self.pos, context: "XML declaration" });
+        }
+        self.scan_xmldecl_body().map_err(|e| match e {
+            XmlError::NotWellFormed { pos, kind, reason } => {
+                match self.char_at(pos.byte_offset) {
+                    Some((c, _)) if !is_xml_char(c) => XmlError::InvalidChar { pos, char: c },
+                    _ if kind == ErrorKind::InvalidToken => XmlError::NotWellFormed { pos, kind: ErrorKind::XmlDecl, reason },
+                    _ => XmlError::NotWellFormed { pos, kind, reason },
+                }
+            }
+            e => e,
+        })
+    }
+
+    fn scan_xmldecl_body(&mut self) -> Result<Token<'a>> {
         let not_wf = |pos, reason: &str| XmlError::NotWellFormed { kind: ErrorKind::XmlDecl, pos, reason: reason.into() };
 
         if !self.skip_whitespace() || !self.try_keyword(b"version") {

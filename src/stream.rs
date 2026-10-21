@@ -13,11 +13,12 @@
 //! text doesn't accumulate. An error is reported as soon as it can't be
 //! the result of truncation.
 //!
-//! Reparse deferral: when a chunk ends inside a construct, that construct
-//! is not re-scanned until the buffered input has at least doubled.
+//! Reparse deferral: when a chunk ends inside a construct and re-scanning
+//! it made no progress, it is not re-scanned again until the buffered
+//! input has doubled or (from 1 KiB) grown past a power of two.
 //! Otherwise a single huge construct (a long comment, say) fed in small
 //! chunks would be re-scanned from its start every time, which is
-//! quadratic: the class of libexpat's CVE-2023-52425, fixed there the same
+//! quadratic: the class of libexpat's CVE-2023-52425, fixed there in a similar
 //! way. Events are still delivered in order, at the latest by `finish`.
 
 use std::collections::VecDeque;
@@ -51,10 +52,14 @@ const LOOKAHEAD: usize = 16;
 ///   An error is reported as soon as it can't be the result of truncation.
 /// - Text at the end of a chunk is delivered up to a point the next chunk
 ///   can't change, so long text doesn't accumulate.
-/// - Reparse deferral: an incomplete construct isn't re-scanned until the
-///   buffered input has at least doubled, so a huge construct fed in tiny
-///   chunks costs linear, not quadratic, time (the class of libexpat
-///   CVE-2023-52425).
+/// - Reparse deferral: once an incomplete construct has been re-scanned
+///   without progress, it isn't re-scanned again until the buffered input
+///   has doubled or (from 1 KiB) grown past a power of two, so a huge
+///   construct fed in tiny chunks costs linear, not quadratic, time (the
+///   class of libexpat CVE-2023-52425).
+///   The first chunk after a pass that made progress is always tried, as
+///   libexpat does: a construct completed by a small chunk is reported at
+///   once.
 /// - Once an error is returned, every later call returns it too.
 ///
 /// `'l` is the lifetime of an external-entity loader, if one is set.
@@ -76,6 +81,9 @@ pub struct StreamParser<'l> {
     /// Size of `buf` when the last pass stopped at an incomplete construct
     /// (0 if it didn't). See the module docs on reparse deferral.
     stalled_at: usize,
+    /// The last pass made progress before stalling, so the next chunk is
+    /// tried at once whatever its size (as libexpat does).
+    stall_fresh: bool,
     /// Whether reparse deferral is on (the default).
     deferral: bool,
     finished: bool,
@@ -106,6 +114,7 @@ impl<'l> StreamParser<'l> {
             failed: None,
             unknown_encoding: None,
             stalled_at: 0,
+            stall_fresh: false,
             deferral: true,
             finished: false,
         }
@@ -222,7 +231,11 @@ impl<'l> StreamParser<'l> {
     fn decode(&mut self, bytes: &[u8], last: bool, handler: &mut impl FnMut(Located<'_>)) -> Result<()> {
         let unknown = &mut self.unknown_encoding;
         match self.decoder.decode_with(bytes, last, &mut self.buf, &mut |name| unknown.as_mut().and_then(|f| f(name))) {
-            Err(XmlError::Encoding { kind: kind @ (ErrorKind::InvalidToken | ErrorKind::PartialChar), reason, .. }) => {
+            Err(XmlError::Encoding {
+                kind: kind @ (ErrorKind::InvalidToken | ErrorKind::PartialChar | ErrorKind::UnclosedToken),
+                reason,
+                ..
+            }) => {
                 let deferral = std::mem::replace(&mut self.deferral, false);
                 let parsed = self.run(false, &mut *handler);
                 self.deferral = deferral;
@@ -285,10 +298,21 @@ impl<'l> StreamParser<'l> {
         f(self).inspect_err(|e| self.failed = Some(e.clone()))
     }
 
+    /// Reparse deferral: whether the buffer has grown enough since the last
+    /// attempt stopped at an incomplete construct to try again: doubled, or
+    /// (from 1 KiB) grown past a power of two. libexpat retries about as
+    /// often, its buffer growing in powers of two. Each attempt costs the
+    /// buffer's length and there is at most one per power of two, so the
+    /// attempts for a construct of length n cost at most about 4n in all.
+    fn worth_retrying(&self) -> bool {
+        let (now, then) = (self.buf.len(), self.stalled_at);
+        now >= 2 * then || (now >= 1024 && now.next_power_of_two() > then.next_power_of_two())
+    }
+
     /// Tokenise and handle as much of `buf` as is complete, then drop the
     /// consumed text.
     fn run(&mut self, last: bool, mut handler: impl FnMut(Located<'_>)) -> Result<()> {
-        if !last && self.deferral && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
+        if !last && self.deferral && self.stalled_at > 0 && !self.stall_fresh && !self.worth_retrying() {
             return Ok(()); // reparse deferral: wait for more input
         }
         let base = self.base;
@@ -355,6 +379,7 @@ impl<'l> StreamParser<'l> {
         }
         // Whatever is left is an incomplete construct (or held-back text).
         self.stalled_at = if last { 0 } else { self.buf.len() };
+        self.stall_fresh = consumed.is_some();
         Ok(())
     }
 }

@@ -104,10 +104,10 @@ pub(crate) enum DtdDecl {
     Comment(String),
     /// A notation declaration (§4.7).
     Notation { name: String, public_id: Option<String>, system_id: Option<String> },
-    /// A parameter-entity reference between declarations (§2.8 DeclSep).
-    /// Parameter entities are not expanded yet, so per §5.1 declarations
-    /// after one are not processed.
-    PeRef,
+    /// A parameter-entity reference between declarations (§2.8 DeclSep),
+    /// by entity name. Parameter entities are not expanded yet, so per §5.1
+    /// declarations after one are not processed.
+    PeRef(String),
 }
 
 /// The parts of a DOCTYPE the parser needs after tokenising.

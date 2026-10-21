@@ -89,6 +89,10 @@ pub(crate) struct State<'l> {
     pub edition: Edition,
     /// See `Parser::with_libexpat_versions`.
     pub(crate) libexpat_versions: bool,
+    /// Stray text before the root whose last run of name characters
+    /// reached the end of its text token, by where the run starts. What
+    /// follows decides the error (see `stray_text`).
+    pending_stray: Option<Position>,
     /// `standalone` from the XML declaration, if given.
     standalone: Option<bool>,
     /// Whether §4.1 WFC Entity Declared applies: no DTD, or only an
@@ -126,6 +130,7 @@ impl<'l> State<'l> {
             attlists: AttlistTable::default(),
             edition: Edition::default(),
             libexpat_versions: false,
+            pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
             loader: None,
@@ -155,6 +160,30 @@ impl<'l> State<'l> {
     /// Content where only whitespace, comments and PIs may appear: junk
     /// after the root element, an invalid token before it (as libexpat
     /// classifies them).
+    /// Text other than whitespace before the root, starting at `s[i..]`.
+    /// libexpat reads a run of name characters there as a name: one ended
+    /// by whitespace, the end of input or one of `>?[%)|,*+` is a syntax
+    /// error at its start, one ended by anything else an invalid token at
+    /// that character (as is text that doesn't start with a name
+    /// character). A run reaching the end of this text token is decided by
+    /// what follows, so it is left pending.
+    fn stray_text(&mut self, s: &str, i: usize) -> Result<()> {
+        let run = self.last_pos.advance(&s[..i]);
+        let len = s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
+        let end = run.advance(&s[i..i + len]);
+        let error = |pos, kind| Err(XmlError::NotWellFormed { pos, kind,
+            reason: "non-whitespace text outside the root element".into() });
+        match s[i + len..].chars().next() {
+            _ if len == 0 => error(run, ErrorKind::InvalidToken),
+            None => {
+                self.pending_stray = Some(run);
+                Ok(())
+            }
+            Some(c) if matches!(c, ' ' | '\t' | '\r' | '\n') || ">?[%)|,*+".contains(c) => error(run, ErrorKind::Syntax),
+            Some(_) => error(end, ErrorKind::InvalidToken),
+        }
+    }
+
     /// Whether parsing is still before the root element.
     pub(crate) fn before_root(&self) -> bool {
         self.phase == Phase::Prolog
@@ -224,7 +253,7 @@ impl<'l> State<'l> {
     /// Act on the internal subset's declarations in document order (§5.1),
     /// delivering the events for what it contained.
     fn process_dtd<'t>(&mut self, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
-        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef));
+        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef(_)));
         self.entity_declared_wfc = self.standalone == Some(true)
             || (!dtd.external_subset && !has_pe_refs);
         // Parameter entities are not read yet, so per §5.1 entity and
@@ -235,7 +264,10 @@ impl<'l> State<'l> {
         for (decl, (start, end)) in dtd.decls.into_iter().zip(dtd.spans) {
             self.span = Span { start, end };
             match decl {
-                DtdDecl::PeRef => after_unread_pe = true,
+                DtdDecl::PeRef(name) => {
+                    after_unread_pe = true;
+                    self.emit(Event::ParameterEntityRef(Cow::Owned(name)), out)?;
+                }
                 DtdDecl::Pi { target, body } => {
                     let body = normalize_newlines(&body).into_owned();
                     self.emit(Event::ProcessingInstruction { target: Cow::Owned(target), body: Cow::Owned(body) }, out)?;
@@ -304,6 +336,11 @@ impl<'l> State<'l> {
 
     /// End of input: everything opened must have closed.
     pub fn finish(&self) -> Result<()> {
+        if let Some(run) = self.pending_stray {
+            // The run of name characters ended the input.
+            return Err(XmlError::NotWellFormed { pos: run, kind: ErrorKind::Syntax,
+                reason: "non-whitespace text outside the root element".into() });
+        }
         if let Some(open) = self.stack.top() {
             return Err(self.not_wf(ErrorKind::NoElements, format!("unclosed element {open:?}")));
         }
@@ -330,6 +367,12 @@ impl<'l> State<'l> {
     /// Handle one token, delivering its events to `out`. `dtd` holds the
     /// declarations the lexer recorded while tokenising a DOCTYPE token.
     pub fn handle<'t>(&mut self, tok: Token<'t>, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
+        if self.pending_stray.is_some() {
+            // The run of name characters was followed by markup ('<' or
+            // '&'), reported where that starts: where this token starts.
+            return Err(XmlError::NotWellFormed { pos: self.last_pos, kind: ErrorKind::InvalidToken,
+                reason: "non-whitespace text outside the root element".into() });
+        }
         match tok {
             Token::XmlDecl(d) => {
                 if self.saw_xmldecl {
@@ -396,15 +439,13 @@ impl<'l> State<'l> {
             Token::Text(s) => {
                 // Per §2.1: character data only inside the root element.
                 if self.stack.is_empty() {
-                    if let Some(mut i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
-                        // Report the first character that isn't whitespace;
-                        // before the root, the first after a run of name
-                        // characters there (libexpat reads one as a name).
-                        if self.phase != Phase::Epilog {
-                            i += s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
+                    if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
+                        if self.phase == Phase::Epilog {
+                            // Report the first character that isn't whitespace.
+                            self.last_pos = self.last_pos.advance(&s[..i]);
+                            return Err(self.outside_root("non-whitespace text outside the root element"));
                         }
-                        self.last_pos = self.last_pos.advance(&s[..i]);
-                        return Err(self.outside_root("non-whitespace text outside the root element"));
+                        return self.stray_text(s, i);
                     }
                     // Whitespace in the prolog/epilog is silently absorbed.
                     return Ok(());
