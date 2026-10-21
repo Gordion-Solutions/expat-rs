@@ -126,6 +126,24 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// Report references in content to external parsed entities as
+    /// [`Event::ExternalEntityRef`], for the caller to read and parse with
+    /// the event's [`EntityContext::parser`](crate::EntityContext::parser),
+    /// instead of skipping them. An external loader, if set, still reads
+    /// them itself. See [`crate::EntityContext`].
+    pub fn with_external_entity_refs(mut self) -> Self {
+        self.state.external_refs = true;
+        self
+    }
+
+    /// A parser for the content of the external entity `context` is for.
+    /// See [`crate::EntityContext::parser`].
+    pub(crate) fn for_entity(context: &crate::EntityContext) -> StreamParser<'static> {
+        let mut p = StreamParser::new();
+        p.state.enter_entity(context);
+        p
+    }
+
     /// See [`crate::Parser::with_libexpat_versions`].
     pub fn with_libexpat_versions(mut self) -> Self {
         self.state.libexpat_versions = true;
@@ -318,7 +336,8 @@ impl<'l> StreamParser<'l> {
         let base = self.base;
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
             .with_edition(self.state.edition)
-            .with_libexpat_versions(self.state.libexpat_versions);
+            .with_libexpat_versions(self.state.libexpat_versions)
+            .with_text_decl(self.state.entity_mode);
         let mut out = VecDeque::new();
         let mut consumed: Option<Position> = None;
         loop {

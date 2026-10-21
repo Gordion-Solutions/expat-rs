@@ -39,6 +39,9 @@ pub struct Lexer<'a> {
     /// Accept any version number libexpat accepts (see
     /// `Parser::with_libexpat_versions`).
     any_version: bool,
+    /// A `<?xml` declaration at the start is a text declaration (§4.3.1):
+    /// the version is optional. For external entities.
+    text_decl: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -57,6 +60,7 @@ impl<'a> Lexer<'a> {
             dtd: Dtd::default(),
             in_subset: false,
             any_version: false,
+            text_decl: false,
         }
     }
 
@@ -74,6 +78,7 @@ impl<'a> Lexer<'a> {
             dtd: Dtd::default(),
             in_subset: false,
             any_version: false,
+            text_decl: false,
         }
     }
 
@@ -149,6 +154,13 @@ impl<'a> Lexer<'a> {
         } else {
             Err(not_wf(self.pos, "expected '?>' to close text declaration (standalone is not allowed here)"))
         }
+    }
+
+    /// Treat a `<?xml` declaration at the start as a text declaration
+    /// (version optional), for external entities.
+    pub(crate) fn with_text_decl(mut self, on: bool) -> Self {
+        self.text_decl = on;
+        self
     }
 
     /// Accept any version number made of `[A-Za-z0-9._-]` (even an empty
@@ -579,6 +591,9 @@ impl<'a> Lexer<'a> {
             XmlError::NotWellFormed { pos, kind, reason } => {
                 match self.char_at(pos.byte_offset) {
                     Some((c, _)) if !is_xml_char(c) => XmlError::InvalidChar { pos, char: c },
+                    _ if self.text_decl && matches!(kind, ErrorKind::InvalidToken | ErrorKind::XmlDecl) => {
+                        XmlError::NotWellFormed { pos, kind: ErrorKind::TextDecl, reason }
+                    }
                     _ if kind == ErrorKind::InvalidToken => XmlError::NotWellFormed { pos, kind: ErrorKind::XmlDecl, reason },
                     _ => XmlError::NotWellFormed { pos, kind, reason },
                 }
@@ -590,7 +605,12 @@ impl<'a> Lexer<'a> {
     fn scan_xmldecl_body(&mut self) -> Result<Token<'a>> {
         let not_wf = |pos, reason: &str| XmlError::NotWellFormed { kind: ErrorKind::XmlDecl, pos, reason: reason.into() };
 
-        if !self.skip_whitespace() || !self.try_keyword(b"version") {
+        let space = self.skip_whitespace();
+        if !(space && self.try_keyword(b"version")) {
+            if self.text_decl && space {
+                // A text declaration may leave the version out.
+                return self.scan_xmldecl_rest("", true);
+            }
             return Err(not_wf(self.pos, "XML declaration must start with version"));
         }
         self.scan_eq()?;
@@ -604,8 +624,15 @@ impl<'a> Lexer<'a> {
         } else if !self.is_valid_version(version) {
             return Err(not_wf(version_pos, &format!("invalid XML version number {version:?}")));
         }
+        let had_space = self.skip_whitespace();
+        self.scan_xmldecl_rest(version, had_space)
+    }
 
-        let mut had_space = self.skip_whitespace();
+    /// The XML declaration after the version (`had_space`: whitespace
+    /// precedes the current position).
+    fn scan_xmldecl_rest(&mut self, version: &'a str, had_space: bool) -> Result<Token<'a>> {
+        let not_wf = |pos, reason: &str| XmlError::NotWellFormed { kind: ErrorKind::XmlDecl, pos, reason: reason.into() };
+        let mut had_space = had_space;
         let mut encoding = None;
         if had_space && self.try_keyword(b"encoding") {
             self.scan_eq()?;

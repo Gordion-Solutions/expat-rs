@@ -121,7 +121,7 @@ pub(crate) struct Dtd {
 }
 
 /// Declared general entities, by name.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct EntityTable {
     entities: HashMap<String, EntityDef>,
 }
@@ -164,14 +164,14 @@ pub(crate) struct AttDecl {
 }
 
 /// Attribute declarations by element name.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct AttlistTable {
     by_element: HashMap<String, ElementAtts>,
 }
 
 /// One element's declared attributes, in declaration order, with an index
 /// by name so lookups stay constant-time however many are declared.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct ElementAtts {
     pub decls: Vec<AttDecl>,
     index: HashMap<String, usize>,

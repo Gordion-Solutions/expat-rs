@@ -32,7 +32,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr
 use std::ptr;
 
 use expat_rs::{
-    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, ErrorKind, Event, Located, Position, Quantifier, Span,
+    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, EntityContext, ErrorKind, Event, Located, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
 use generated::*;
@@ -48,6 +48,8 @@ pub type XML_Size = c_ulong;
 pub type XML_Index = c_long;
 pub type XML_Parser = *mut Shim;
 
+const XML_PARAM_ENTITY_PARSING_NEVER: c_int = 0;
+const XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: c_int = 1;
 const XML_TRUE: XML_Bool = 1;
 const XML_FALSE: XML_Bool = 0;
 const XML_STATUS_ERROR: XML_Status = 0;
@@ -167,6 +169,32 @@ struct Handlers {
     attlist_decl: Cell<AttlistDeclHandler>,
 }
 
+impl Handlers {
+    /// Take on another parser's handlers (an external entity parser starts
+    /// with its parent's).
+    fn copy_from(&self, other: &Handlers) {
+        macro_rules! copy { ($($f:ident)*) => { $(self.$f.set(other.$f.get());)* } }
+        copy!(start_element end_element character_data processing_instruction comment start_cdata
+              end_cdata default default_expand start_doctype end_doctype entity_decl
+              unparsed_entity_decl notation_decl start_namespace end_namespace not_standalone
+              external_entity_ref skipped_entity xml_decl element_decl attlist_decl);
+    }
+}
+
+/// What kind of parser a `Shim` is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// From `XML_ParserCreate*`: parses a document.
+    Root,
+    /// From `XML_ExternalEntityParserCreate` with a context: parses an
+    /// external entity's content.
+    Entity,
+    /// From `XML_ExternalEntityParserCreate` without a context: would parse
+    /// an external DTD subset or parameter entity, which expat-capi doesn't
+    /// read (as a non-validating parser may, XML 1.0 §5.1).
+    Dtd,
+}
+
 /// Where parsing has got to.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Status {
@@ -219,6 +247,18 @@ pub struct Shim {
     id_index: Cell<c_int>,
     /// `standalone="yes"` in the XML declaration.
     standalone: Cell<bool>,
+    role: Role,
+    /// Entity children: what the parser for the entity's content needs.
+    entity: Option<EntityContext>,
+    /// Contexts of the external entity references reported to the
+    /// handler, by the context string passed with them, for
+    /// `XML_ExternalEntityParserCreate`; and the latest one.
+    entity_contexts: RefCell<std::collections::HashMap<CString, EntityContext>>,
+    last_entity_context: RefCell<Option<EntityContext>>,
+    /// The DOCTYPE's external identifiers, once seen: (system, public).
+    doctype_ids: RefCell<Option<(Option<CString>, Option<CString>)>>,
+    /// The foreign DTD (`XML_UseForeignDTD`) has been asked for.
+    foreign_dtd_done: Cell<bool>,
     /// The first bytes of input, until it is known whether they are a
     /// byte order mark, and whether they were (libexpat counts a byte
     /// order mark as a column on line 1; expat-rs doesn't).
@@ -283,6 +323,12 @@ impl Shim {
             id_attributes: RefCell::new(std::collections::HashMap::new()),
             id_index: Cell::new(-1),
             standalone: Cell::new(false),
+            role: Role::Root,
+            entity: None,
+            entity_contexts: RefCell::new(std::collections::HashMap::new()),
+            last_entity_context: RefCell::new(None),
+            doctype_ids: RefCell::new(None),
+            foreign_dtd_done: Cell::new(false),
             head: RefCell::new(Vec::new()),
             bom: Cell::new(None),
             utf16: Cell::new(false),
@@ -326,16 +372,26 @@ impl Shim {
     /// The expat-rs parser for this shim, configured from the options set
     /// so far.
     fn make_parser(&self) -> StreamParser<'static> {
-        // libexpat applies the Fourth Edition's name rules (Appendix B)
-        // but accepts any version number made of name characters.
-        let mut p = StreamParser::new()
-            .with_edition(Edition::Fourth)
-            .with_libexpat_versions()
-            .with_reparse_deferral(self.reparse_deferral.get())
-            .with_amplification_limits(self.amplification.get());
-        if self.ns_sep.is_some() {
-            p = p.with_namespaces();
-        }
+        let mut p = match &self.entity {
+            // Edition, version rule, namespaces and limits come from the
+            // document.
+            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()),
+            None => {
+                // libexpat applies the Fourth Edition's name rules
+                // (Appendix B) but accepts any version number made of name
+                // characters.
+                let mut p = StreamParser::new()
+                    .with_edition(Edition::Fourth)
+                    .with_libexpat_versions()
+                    .with_external_entity_refs()
+                    .with_reparse_deferral(self.reparse_deferral.get())
+                    .with_amplification_limits(self.amplification.get());
+                if self.ns_sep.is_some() {
+                    p = p.with_namespaces();
+                }
+                p
+            }
+        };
         if let Some(enc) = self.encoding.borrow().as_deref() {
             p = p.with_encoding(enc);
         }
@@ -357,6 +413,11 @@ impl Shim {
                 return XML_STATUS_ERROR;
             }
             _ => {}
+        }
+        if self.role == Role::Dtd {
+            // External DTD subsets aren't read (see `Role::Dtd`).
+            self.status.set(if is_final { Status::Finished } else { Status::Parsing });
+            return XML_STATUS_OK;
         }
         let Ok(mut core) = self.core.try_borrow_mut() else {
             // XML_Parse from inside one of this parser's own handlers.
@@ -624,9 +685,21 @@ impl Shim {
                 self.standalone.set(d.standalone == Some(true));
                 self.chunk_text.set(self.converts(d.encoding));
             }
-            // An external subset: libexpat asks before the DOCTYPE handler.
-            Event::Doctype { system_id, public_id, .. } if system_id.is_some() || public_id.is_some() => {
-                self.not_standalone();
+            Event::Doctype { system_id, public_id, .. } => {
+                *self.doctype_ids.borrow_mut() = Some((opt_cstr(system_id.as_deref()), opt_cstr(public_id.as_deref())));
+                // An external subset: libexpat asks before the DOCTYPE
+                // handler.
+                if system_id.is_some() || public_id.is_some() {
+                    self.not_standalone();
+                    if self.stop_requested.get() {
+                        return;
+                    }
+                }
+            }
+            // A document without a DOCTYPE asks for its foreign DTD before
+            // the root element.
+            Event::StartElement { .. } if self.role == Role::Root && self.doctype_ids.borrow().is_none() => {
+                self.external_dtd(None);
                 if self.stop_requested.get() {
                     return;
                 }
@@ -638,11 +711,13 @@ impl Shim {
         match l.event {
             Event::XmlDecl(d) => match h.xml_decl.get() {
                 Some(f) => {
-                    let (v, e) = (cstr(d.version), opt_cstr(d.encoding));
+                    // A text declaration may have no version: NULL, as in
+                    // libexpat.
+                    let (v, e) = (opt_cstr(Some(d.version).filter(|v| !v.is_empty())), opt_cstr(d.encoding));
                     let standalone = d.standalone.map_or(-1, |s| s as c_int);
                     // SAFETY: registered XmlDeclHandler; string arguments are
                     // valid C strings (or null) for the call.
-                    unsafe { f(ud, v.as_ptr(), ptr_of(&e), standalone) };
+                    unsafe { f(ud, ptr_of(&v), ptr_of(&e), standalone) };
                 }
                 None => {
                     self.to_default(l.raw);
@@ -660,6 +735,13 @@ impl Shim {
                 }
             },
             Event::EndDoctype => {
+                // The external subset (or a foreign DTD) is asked for after
+                // the internal subset, as in libexpat.
+                let ids = self.doctype_ids.borrow().clone();
+                self.external_dtd(ids);
+                if self.stop_requested.get() {
+                    return;
+                }
                 if let Some(f) = h.end_doctype.get() {
                     // SAFETY: registered EndDoctypeDeclHandler.
                     unsafe { f(ud) };
@@ -840,6 +922,35 @@ impl Shim {
                 }
             }
             Event::ParameterEntityRef(_) => self.not_standalone(),
+            Event::ExternalEntityRef { name, system_id, public_id, context } => {
+                // With no handler, libexpat passes the reference to the
+                // default handler (ElementTree relies on this).
+                let Some(f) = h.external_entity_ref.get() else {
+                    self.to_default(l.raw);
+                    return;
+                };
+                {
+                    // The context string identifies the reference to
+                    // XML_ExternalEntityParserCreate; the namespace
+                    // declarations in scope travel in `context` itself.
+                    let key = cstr(&name);
+                    if let Ok(mut contexts) = self.entity_contexts.try_borrow_mut() {
+                        contexts.insert(key.clone(), context.clone());
+                    }
+                    *self.last_entity_context.borrow_mut() = Some(context);
+                    let base = self.base.borrow().clone();
+                    let (s, p) = (cstr(&system_id), opt_cstr(public_id.as_deref()));
+                    let me = (self as *const Shim).cast_mut();
+                    // SAFETY: registered ExternalEntityRefHandler, given this
+                    // parser and valid C strings (or null).
+                    if unsafe { f(me, key.as_ptr(), ptr_of(&base), s.as_ptr(), ptr_of(&p)) } == 0 {
+                        // Reported at the reference, as libexpat does.
+                        self.token_end.set(self.pos.get());
+                        self.stop_error.set(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
+                        self.stop_requested.set(true);
+                    }
+                }
+            }
             Event::SkippedEntity(name) => match h.skipped_entity.get() {
                 Some(f) => {
                     let n = cstr(&name);
@@ -860,6 +971,34 @@ impl Shim {
     /// piece is reported where it is in the source; text that came from an
     /// entity is all reported at the reference. Stops early if a handler
     /// calls `XML_StopParser`.
+    /// Ask the external entity handler for the external DTD subset
+    /// (`ids`: the DOCTYPE's system and public identifiers), or for the
+    /// foreign DTD when the document names none, as libexpat does when
+    /// parameter entities are parsed: XML_PARAM_ENTITY_PARSING_ALWAYS, or
+    /// UNLESS_STANDALONE in a document that isn't standalone. Once only.
+    fn external_dtd(&self, ids: Option<(Option<CString>, Option<CString>)>) {
+        let (Some(f), pep) = (self.handlers.external_entity_ref.get(), self.param_entity_parsing.get()) else { return };
+        if self.foreign_dtd_done.get() || pep == XML_PARAM_ENTITY_PARSING_NEVER
+            || (pep == XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE && self.standalone.get())
+        {
+            return;
+        }
+        let (system, public) = match ids {
+            Some((s, p)) if s.is_some() || p.is_some() => (s, p),
+            _ if self.use_foreign_dtd.get() => (None, None),
+            _ => return,
+        };
+        self.foreign_dtd_done.set(true);
+        let base = self.base.borrow().clone();
+        let me = (self as *const Shim).cast_mut();
+        // SAFETY: registered ExternalEntityRefHandler, given this parser, a
+        // null context (a DTD) and valid C strings or null.
+        if unsafe { f(me, ptr::null(), ptr_of(&base), ptr_of(&system), ptr_of(&public)) } == 0 {
+            self.stop_error.set(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
+            self.stop_requested.set(true);
+        }
+    }
+
     /// A reference the document's own content can't resolve (an external
     /// subset, a parameter entity): unless it declared itself standalone,
     /// libexpat asks the not-standalone handler whether to go on; 0 means
@@ -1386,6 +1525,9 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionActivationThreshold
 ) -> XML_Bool {
     // SAFETY: see `shim`.
     let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+    if p.role != Role::Root {
+        return XML_FALSE; // a setting for the whole document
+    }
     let mut limits = p.amplification.get();
     limits.activation_threshold = activation_threshold_bytes;
     p.amplification.set(limits);
@@ -1399,6 +1541,9 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplificatio
 ) -> XML_Bool {
     // SAFETY: see `shim`.
     let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+    if p.role != Role::Root {
+        return XML_FALSE; // a setting for the whole document
+    }
     if maximum_amplification_factor.is_nan() || maximum_amplification_factor < 1.0 {
         return XML_FALSE;
     }
@@ -1410,12 +1555,39 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplificatio
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
-    _parser: XML_Parser,
-    _context: *const XML_Char,
-    _encoding: *const XML_Char,
+    parser: XML_Parser,
+    context: *const XML_Char,
+    encoding: *const XML_Char,
 ) -> XML_Parser {
-    // External entity parsers come in phase 5.
-    ptr::null_mut()
+    // SAFETY: see `shim`; context and encoding are null or valid C strings.
+    let Some(parent) = (unsafe { shim(parser) }) else { return ptr::null_mut() };
+    let encoding = unsafe { c_arg(encoding) };
+    let (role, entity) = if context.is_null() {
+        (Role::Dtd, None)
+    } else {
+        // SAFETY: a valid C string, per the API.
+        let key = unsafe { CStr::from_ptr(context) };
+        // The reference this context was given with; failing that, the
+        // latest one (a handler may pass a context of its own).
+        let entity = parent.entity_contexts.try_borrow().ok().and_then(|c| c.get(key).cloned())
+            .or_else(|| parent.last_entity_context.try_borrow().ok().and_then(|c| c.clone()));
+        match entity {
+            Some(entity) => (Role::Entity, Some(entity)),
+            None => (Role::Dtd, None),
+        }
+    };
+    let mut child = Shim::new(encoding, Some(parent.memsuite), parent.ns_sep);
+    child.role = role;
+    child.entity = entity;
+    child.handlers.copy_from(&parent.handlers);
+    child.unknown_encoding.set(parent.unknown_encoding.get());
+    child.user_data.set(parent.user_data.get());
+    child.parser_as_arg.set(parent.parser_as_arg.get());
+    child.ns_triplets.set(parent.ns_triplets.get());
+    child.reparse_deferral.set(parent.reparse_deferral.get());
+    child.param_entity_parsing.set(parent.param_entity_parsing.get());
+    *child.base.borrow_mut() = parent.base.borrow().clone();
+    Box::into_raw(Box::new(child))
 }
 
 #[no_mangle]

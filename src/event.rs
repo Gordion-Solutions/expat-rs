@@ -13,6 +13,7 @@
 use std::borrow::Cow;
 
 use crate::error::Position;
+use crate::external::EntityContext;
 use crate::token::XmlDecl;
 
 /// Something the parser found in the document, in document order.
@@ -164,6 +165,23 @@ pub enum Event<'a> {
     /// declarations after one are not processed. libexpat calls its
     /// not-standalone handler at such a reference.
     ParameterEntityRef(Cow<'a, str>),
+
+    /// A reference in content to an external parsed entity, reported for
+    /// the caller to read when
+    /// [`crate::StreamParser::with_external_entity_refs`] is on (and no
+    /// external loader is set). Parse the entity's content with
+    /// `context.parser()`. Mirrors libexpat's external entity reference
+    /// handler.
+    ExternalEntityRef {
+        /// The entity's name.
+        name: Cow<'a, str>,
+        /// Its system identifier.
+        system_id: Cow<'a, str>,
+        /// Its public identifier, if declared.
+        public_id: Option<Cow<'a, str>>,
+        /// What a parser for its content needs (see [`EntityContext`]).
+        context: EntityContext,
+    },
 
     /// A reference in content to an entity whose text was not read: an
     /// external entity with no loader installed, or an undeclared entity

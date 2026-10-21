@@ -51,6 +51,29 @@ impl Namespaces {
         Self { scopes: Vec::new(), bindings: HashMap::new(), edition }
     }
 
+    /// The declarations in scope, as (prefix, namespace name) sorted by
+    /// prefix (`None`: the default namespace; a `None` name undeclares it).
+    pub fn in_scope(&self) -> Vec<(Option<String>, Option<String>)> {
+        let mut bindings: Vec<_> = self
+            .bindings
+            .iter()
+            .filter_map(|(prefix, stack)| {
+                let uri = stack.last()?.clone();
+                Some(((!prefix.is_empty()).then(|| prefix.clone()), uri))
+            })
+            .collect();
+        bindings.sort();
+        bindings
+    }
+
+    /// Start with these declarations in scope, outside any element: the
+    /// declarations around a reference to the external entity being parsed.
+    pub fn preset(&mut self, bindings: &[(Option<String>, Option<String>)]) {
+        for (prefix, uri) in bindings {
+            self.bindings.entry(prefix.clone().unwrap_or_default()).or_default().push(uri.clone());
+        }
+    }
+
     /// Namespace name bound to `prefix` (`None`: the default namespace).
     fn lookup(&self, prefix: Option<&str>) -> Option<&str> {
         if prefix == Some("xml") {
@@ -106,6 +129,12 @@ impl Namespaces {
             }
             Event::NotationDecl { ref name, .. } if name.contains(':') => {
                 Err(error(pos, ErrorKind::InvalidToken, format!("notation name {name:?} contains a colon")))
+            }
+            // A parser for the entity's content resolves prefixes as here.
+            Event::ExternalEntityRef { name, system_id, public_id, mut context } => {
+                context.namespaces = Some(self.in_scope());
+                out.push_back((Event::ExternalEntityRef { name, system_id, public_id, context }, span));
+                Ok(())
             }
             Event::SkippedEntity(ref name) if name.contains(':') => {
                 Err(error(pos, ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon")))
