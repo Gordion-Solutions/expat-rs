@@ -89,6 +89,8 @@ pub(crate) enum DtdDecl {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Dtd {
     pub decls: Vec<DtdDecl>,
+    /// Start and end of the declaration each entry of `decls` came from.
+    pub spans: Vec<(Position, Position)>,
     /// Whether the DOCTYPE names an external subset (SYSTEM / PUBLIC).
     pub external_subset: bool,
 }

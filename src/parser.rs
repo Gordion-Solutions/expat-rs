@@ -22,7 +22,10 @@ use std::collections::VecDeque;
 use crate::chars::Edition;
 use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityTable, ExpansionLimits};
 use crate::error::{Position, Result, XmlError};
-use crate::event::{normalize_newlines, Attribute, Event};
+use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
+
+/// Events produced while handling a token, each with its span.
+pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span)>;
 use crate::expand::{Expander, ExternalLoader};
 use crate::lexer::Lexer;
 use crate::namespaces::Namespaces;
@@ -76,6 +79,9 @@ pub(crate) struct State<'l> {
     saw_doctype: bool,
     /// Where the token being handled starts, for error reports.
     pub last_pos: Position,
+    /// Span attached to the events being emitted: the token being handled,
+    /// or the internal-subset declaration being processed.
+    pub span: Span,
     /// Entities declared by `<!ENTITY ...>` in the DOCTYPE internal subset.
     entities: EntityTable,
     /// Attribute types and defaults from `<!ATTLIST>` declarations.
@@ -109,6 +115,7 @@ impl<'l> State<'l> {
             saw_xmldecl: false,
             saw_doctype: false,
             last_pos: Position::start(),
+            span: Span { start: Position::start(), end: Position::start() },
             entities: EntityTable::new(),
             attlists: AttlistTable::default(),
             edition: Edition::default(),
@@ -149,10 +156,10 @@ impl<'l> State<'l> {
     }
 
     /// Deliver an event, through namespace processing if it is enabled.
-    fn emit<'t>(&mut self, event: Event<'t>, out: &mut VecDeque<Event<'t>>) -> Result<()> {
+    fn emit<'t>(&mut self, event: Event<'t>, out: &mut Out<'t>) -> Result<()> {
         match &mut self.namespaces {
-            Some(ns) => ns.process(event, self.last_pos, out)?,
-            None => out.push_back(event),
+            Some(ns) => ns.process(event, self.span, self.last_pos, out)?,
+            None => out.push_back((event, self.span)),
         }
         Ok(())
     }
@@ -183,7 +190,7 @@ impl<'l> State<'l> {
 
     /// Act on the internal subset's declarations in document order (§5.1),
     /// delivering the events for what it contained.
-    fn process_dtd<'t>(&mut self, dtd: Dtd, out: &mut VecDeque<Event<'t>>) -> Result<()> {
+    fn process_dtd<'t>(&mut self, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
         let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef));
         self.entity_declared_wfc = self.standalone == Some(true)
             || (!dtd.external_subset && !has_pe_refs);
@@ -191,7 +198,9 @@ impl<'l> State<'l> {
         // attribute-list declarations after an unread one are not
         // processed. Other declarations still are.
         let mut after_unread_pe = false;
-        for decl in dtd.decls {
+        let doctype_span = self.span;
+        for (decl, (start, end)) in dtd.decls.into_iter().zip(dtd.spans) {
+            self.span = Span { start, end };
             match decl {
                 DtdDecl::PeRef => after_unread_pe = true,
                 DtdDecl::Pi { target, body } => {
@@ -230,6 +239,7 @@ impl<'l> State<'l> {
                 }
             }
         }
+        self.span = doctype_span;
         self.emit(Event::EndDoctype, out)
     }
 
@@ -260,7 +270,7 @@ impl<'l> State<'l> {
 
     /// Handle one token, delivering its events to `out`. `dtd` holds the
     /// declarations the lexer recorded while tokenising a DOCTYPE token.
-    pub fn handle<'t>(&mut self, tok: Token<'t>, dtd: Dtd, out: &mut VecDeque<Event<'t>>) -> Result<()> {
+    pub fn handle<'t>(&mut self, tok: Token<'t>, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
         match tok {
             Token::XmlDecl(d) => {
                 if self.saw_xmldecl {
@@ -366,10 +376,11 @@ impl<'l> State<'l> {
 /// Options are set with the `with_*` methods before parsing. For input in
 /// chunks, use [`crate::StreamParser`]; for bytes, [`crate::decode`] first.
 pub struct Parser<'a> {
+    src: &'a str,
     lexer: Lexer<'a>,
     state: State<'a>,
     /// Events produced but not yet returned by `next_event`.
-    out: VecDeque<Event<'a>>,
+    out: Out<'a>,
     done: bool,
 }
 
@@ -378,7 +389,7 @@ impl<'a> Parser<'a> {
     /// no namespace processing, no external entities, default
     /// [`ExpansionLimits`].
     pub fn new(src: &'a str) -> Self {
-        Self { lexer: Lexer::new(src), state: State::new(), out: VecDeque::new(), done: false }
+        Self { src, lexer: Lexer::new(src), state: State::new(), out: VecDeque::new(), done: false }
     }
 
     /// Select the XML 1.0 edition whose Name rules apply. Default:
@@ -425,16 +436,25 @@ impl<'a> Parser<'a> {
 
     /// Produce the next event, or `Ok(None)` at end of well-formed input.
     pub fn next_event(&mut self) -> Result<Option<Event<'a>>> {
+        Ok(self.next_located()?.map(|l| l.event))
+    }
+
+    /// Like [`next_event`](Self::next_event), with the event's [`Span`]
+    /// and the source text it came from.
+    pub fn next_located(&mut self) -> Result<Option<Located<'a>>> {
         loop {
-            if let Some(e) = self.out.pop_front() {
-                return Ok(Some(e));
+            if let Some((event, span)) = self.out.pop_front() {
+                let raw = self.src.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
+                return Ok(Some(Located { event, span, raw }));
             }
             if self.done {
                 return Ok(None);
             }
-            self.state.last_pos = self.lexer.position();
+            let start = self.lexer.position();
+            self.state.last_pos = start;
             match self.lexer.next_token()? {
                 Some(tok) => {
+                    self.state.span = Span { start, end: self.lexer.position() };
                     let dtd = self.lexer.take_dtd();
                     self.state.handle(tok, dtd, &mut self.out)?;
                 }
@@ -445,6 +465,7 @@ impl<'a> Parser<'a> {
             }
         }
     }
+
 }
 
 /// Per §3.1 (Unique Att Spec): no element may have two attributes with the
