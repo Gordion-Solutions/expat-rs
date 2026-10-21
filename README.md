@@ -35,7 +35,7 @@ A from-scratch Rust implementation of an XML 1.0 parser, designed to:
 
 ## What this is not
 
-- **Not a translation of libexpat.** See `METHODOLOGY.md` for the clean-room declaration. The implementation is built from the W3C XML 1.0 Fifth Edition specification (plus the Fourth Edition's Appendix B for `Edition::Fourth`), with no code derived from the libexpat source.
+- **Not a translation of libexpat.** It is an independent implementation; see `METHODOLOGY.md`. The implementation is built from the W3C XML 1.0 Fifth Edition specification (plus the Fourth Edition's Appendix B for `Edition::Fourth`), with no code derived from the libexpat source.
 - **Not a fork of an existing Rust XML parser.** `quick-xml`, `xml-rs`,`roxmltree` exist and are good, but none target full libexpat-compatible conformance (DTDs, entity expansion, namespace processing, encoding detection).
 
 ## Why
@@ -95,7 +95,7 @@ parse` (or `stream_vs_whole`). Benchmarks: `bench/generate.py` then
 
 ```
 .
-├── METHODOLOGY.md             # clean-room declaration
+├── METHODOLOGY.md             # how it is written
 ├── src/
 │   ├── lib.rs                 # public API
 │   ├── token.rs               # Token enum (every W3C production cited)
