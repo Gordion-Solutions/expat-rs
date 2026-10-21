@@ -1,7 +1,9 @@
-# Methodology — Clean-Room Implementation
+# Methodology — Independent Implementation
 
-This project is a clean-room implementation of XML 1.0. This document
-exists so contributors and reviewers can check that.
+expat-rs is an independent implementation of XML 1.0, written from the
+specifications rather than ported from libexpat or any other parser. This
+document says what it is based on, so contributors and reviewers can check
+that.
 
 ## Reference materials consulted
 
@@ -21,16 +23,16 @@ The implementation is derived **only** from:
    `src/edition4.rs` is generated from the spec text by
    `tools/gen_edition4_tables.py`; nothing in it is hand-written.
 
-## Reference materials NOT consulted
+## Not used as a source
 
-- The libexpat source code is not read by anyone writing parser code.
-  If you've read it before for some other reason, that's fine — just
-  don't paste from memory. Reviewers will flag PRs that look like they
-  came from libexpat.
+- libexpat's source code is not used to write expat-rs: nobody opens it
+  to work out how to implement something, and nothing is pasted from it
+  or from memory of it. Reviewers will flag PRs that look like they came
+  from libexpat.
 
-## How libexpat is used (legitimately)
+## How libexpat is used
 
-libexpat appears in this project's lifecycle in two narrow ways:
+libexpat appears in this project in two ways:
 
 1. **As a behavioural reference for ambiguous spec edges.** When XML 1.0
    has multiple defensible interpretations of a corner case, we run the
@@ -42,16 +44,11 @@ libexpat appears in this project's lifecycle in two narrow ways:
 
 ## Why
 
-Two reasons we go clean-room rather than translating:
-
-Legal: Even with both projects under MIT, downstream users in
-regulated industries want a clean provenance trail. Clean-room
-gives them that.
-
-Engineering: A line-by-line translation of libexpat ends up looking
-like C-with-Rust-syntax — same ownership patterns, same error model,
-same API shape. None of those are good Rust. Working from the spec
-gets us a codebase that uses the type system properly.
+We work from the spec rather than translating libexpat because a
+line-by-line translation ends up looking like C-with-Rust-syntax — same
+ownership patterns, same error model, same API shape. None of those are
+good Rust. Working from the spec gets us a codebase that uses the type
+system properly.
 
 ## Per-PR checklist
 
