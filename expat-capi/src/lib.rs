@@ -181,6 +181,16 @@ impl Handlers {
     }
 }
 
+/// A DOCTYPE's source text and how far into it the default handler has
+/// been given what no other handler took.
+struct DtdText {
+    raw: String,
+    /// Where it starts in the document (decoded byte offset).
+    start: usize,
+    /// Offset in `raw` up to which it has been dealt with.
+    cursor: usize,
+}
+
 /// What kind of parser a `Shim` is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
@@ -259,6 +269,10 @@ pub struct Shim {
     /// `XML_ExternalEntityParserCreate`; and the latest one.
     entity_contexts: RefCell<std::collections::HashMap<CString, EntityContext>>,
     last_entity_context: RefCell<Option<EntityContext>>,
+    /// While a DOCTYPE is delivered and a default handler is set: its
+    /// source text, so the parts no handler takes can go to the default
+    /// handler.
+    dtd_text: RefCell<Option<DtdText>>,
     /// The DOCTYPE's external identifiers, once seen: (system, public).
     doctype_ids: RefCell<Option<(Option<CString>, Option<CString>)>>,
     /// The foreign DTD (`XML_UseForeignDTD`) has been asked for.
@@ -334,6 +348,7 @@ impl Shim {
             entity_contexts: RefCell::new(std::collections::HashMap::new()),
             last_entity_context: RefCell::new(None),
             doctype_ids: RefCell::new(None),
+            dtd_text: RefCell::new(None),
             foreign_dtd_done: Cell::new(false),
             head: RefCell::new(Vec::new()),
             bom: Cell::new(None),
@@ -390,6 +405,7 @@ impl Shim {
                     .with_edition(Edition::Fourth)
                     .with_libexpat_versions()
                     .with_external_entity_refs()
+                    .with_outside_whitespace()
                     .with_reparse_deferral(self.reparse_deferral.get())
                     .with_amplification_limits(self.amplification.get());
                 if self.ns_sep.is_some() {
@@ -547,6 +563,60 @@ fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *
         unsafe { release(info.data) };
     }
     map
+}
+
+/// Length of a DOCTYPE's header: through the `[` that opens its internal
+/// subset (outside quoted literals), or all of it.
+fn doctype_header_len(raw: &str) -> usize {
+    let mut quote = None;
+    for (i, c) in raw.char_indices() {
+        match (quote, c) {
+            (Some(q), _) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '[') => return i + 1,
+            _ => {}
+        }
+    }
+    raw.len()
+}
+
+/// Split DTD markup into the tokens libexpat gives its default handler:
+/// `<!KEYWORD`, whitespace runs, names (with `#` keywords and a trailing
+/// `?*+`), quoted literals, `( | , [ ] >`, `)` with a trailing `?*+`,
+/// `%` alone or a whole `%name;` reference, and whole comments and
+/// processing instructions. (Token boundaries found by black-box tests of
+/// libexpat.)
+fn dtd_tokens(s: &str) -> Vec<&str> {
+    let is_name = |c: char| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '#') || !c.is_ascii();
+    let mut tokens = Vec::new();
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let len = if rest.starts_with("<!--") {
+            rest.find("-->").map_or(rest.len(), |i| i + 3)
+        } else if rest.starts_with("<?") {
+            rest.find("?>").map_or(rest.len(), |i| i + 2)
+        } else if let Some(keyword) = rest.strip_prefix("<!") {
+            2 + keyword.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(keyword.len())
+        } else if matches!(c, ' ' | '\t' | '\r' | '\n') {
+            rest.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')).unwrap_or(rest.len())
+        } else if c == '"' || c == '\'' {
+            rest[1..].find(c).map_or(rest.len(), |i| i + 2)
+        } else if c == '%' {
+            match rest[1..].chars().next() {
+                Some(n) if is_name(n) => rest.find(';').map_or(rest.len(), |i| i + 1),
+                _ => 1,
+            }
+        } else if c == ')' || is_name(c) {
+            let name = if c == ')' { 1 } else { rest.find(|c: char| !is_name(c)).unwrap_or(rest.len()) };
+            name + rest[name..].starts_with(['?', '*', '+']) as usize
+        } else {
+            c.len_utf8()
+        };
+        tokens.push(&rest[..len]);
+        rest = &rest[len..];
+    }
+    tokens
 }
 
 /// Largest piece of character data libexpat delivers for input it
@@ -722,6 +792,13 @@ impl Shim {
             }
             _ => {}
         }
+        // A handler called for the DOCTYPE may stop parsing; a stop from
+        // before (finishing an empty element's tag) still lets this through.
+        let stopped = self.stop_requested.get();
+        self.dtd_default(&l);
+        if !stopped && self.stop_requested.get() {
+            return;
+        }
         let h = &self.handlers;
         let ud = self.ud();
         match l.event {
@@ -739,17 +816,19 @@ impl Shim {
                     self.to_default(l.raw);
                 }
             },
-            Event::Doctype { name, system_id, public_id, has_internal_subset, .. } => match h.start_doctype.get() {
-                Some(f) => {
+            Event::Doctype { name, system_id, public_id, has_internal_subset, .. } => {
+                // Without a handler, the default handler has had it token
+                // by token (`dtd_default`).
+                if let Some(f) = h.start_doctype.get() {
                     let (n, s, p) = (cstr(name), opt_cstr(system_id.as_deref()), opt_cstr(public_id.as_deref()));
                     // SAFETY: registered StartDoctypeDeclHandler; valid C
                     // strings (or null) for the call.
                     unsafe { f(ud, n.as_ptr(), ptr_of(&s), ptr_of(&p), has_internal_subset as c_int) };
                 }
-                None => {
-                    self.to_default(l.raw);
-                }
-            },
+            }
+            Event::Whitespace(_) => {
+                self.to_default(l.raw);
+            }
             Event::EndDoctype => {
                 // The external subset (or a foreign DTD) is asked for after
                 // the internal subset, as in libexpat.
@@ -992,6 +1071,89 @@ impl Shim {
     /// piece is reported where it is in the source; text that came from an
     /// entity is all reported at the reference. Stops early if a handler
     /// calls `XML_StopParser`.
+    /// The DOCTYPE as libexpat shows it to the default handler: token by
+    /// token, the parts no other handler takes (the header without a
+    /// DOCTYPE handler, declarations without their handler, the whitespace
+    /// between declarations and parameter-entity references always, the
+    /// closing `]>` without an end handler).
+    fn dtd_default(&self, l: &Located<'_>) {
+        let h = &self.handlers;
+        if h.default.get().is_none() {
+            return;
+        }
+        match &l.event {
+            Event::Doctype { .. } => {
+                let header_len = doctype_header_len(l.raw);
+                let has_subset = l.raw[..header_len].ends_with('[');
+                if h.start_doctype.get().is_none() {
+                    let mut header = &l.raw[..header_len];
+                    if !has_subset && h.end_doctype.get().is_some() {
+                        header = header.strip_suffix('>').unwrap_or(header);
+                    }
+                    for token in dtd_tokens(header) {
+                        self.to_default(token);
+                    }
+                }
+                *self.dtd_text.borrow_mut() =
+                    Some(DtdText { raw: l.raw.to_string(), start: l.span.start.byte_offset, cursor: header_len });
+            }
+            Event::EndDoctype => {
+                let Some(dtd) = self.dtd_text.borrow_mut().take() else { return };
+                let tail = dtd.raw.get(dtd.cursor..).unwrap_or("");
+                let rest = tail.trim_start_matches([' ', '\t', '\r', '\n']);
+                if rest.len() < tail.len() {
+                    self.to_default(&tail[..tail.len() - rest.len()]);
+                }
+                if h.end_doctype.get().is_none() {
+                    for token in dtd_tokens(rest) {
+                        self.to_default(token);
+                    }
+                }
+            }
+            Event::ElementDecl { .. }
+            | Event::AttlistDecl { .. }
+            | Event::EntityDecl { .. }
+            | Event::NotationDecl { .. }
+            | Event::ProcessingInstruction { .. }
+            | Event::Comment(_)
+            | Event::ParameterEntityRef(_) => {
+                let gap = {
+                    let Ok(mut text) = self.dtd_text.try_borrow_mut() else { return };
+                    let Some(dtd) = text.as_mut() else { return }; // not in a DOCTYPE
+                    let Some(at) = l.span.start.byte_offset.checked_sub(dtd.start) else { return };
+                    if at < dtd.cursor {
+                        return; // another attribute of an ATTLIST already dealt with
+                    }
+                    let gap = dtd.raw.get(dtd.cursor..at).unwrap_or("").to_string();
+                    dtd.cursor = at + l.raw.len();
+                    gap
+                };
+                if !gap.is_empty() {
+                    self.to_default(&gap);
+                }
+                let unhandled = match &l.event {
+                    Event::ElementDecl { .. } => h.element_decl.get().is_none(),
+                    Event::AttlistDecl { .. } => h.attlist_decl.get().is_none(),
+                    Event::EntityDecl { notation, .. } => {
+                        h.entity_decl.get().is_none() && !(notation.is_some() && h.unparsed_entity_decl.get().is_some())
+                    }
+                    Event::NotationDecl { .. } => h.notation_decl.get().is_none(),
+                    Event::ParameterEntityRef(_) => {
+                        self.to_default(l.raw);
+                        false
+                    }
+                    _ => false, // processing instructions and comments: their own arms
+                };
+                if unhandled {
+                    for token in dtd_tokens(l.raw) {
+                        self.to_default(token);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Ask the external entity handler for the external DTD subset
     /// (`ids`: the DOCTYPE's system and public identifiers), or for the
     /// foreign DTD when the document names none, as libexpat does when

@@ -99,6 +99,9 @@ pub(crate) struct State<'l> {
     pub(crate) external_refs: bool,
     /// Entities being read around this parser's input (entity mode).
     pub(crate) open_entities: Vec<String>,
+    /// Report whitespace outside the root element
+    /// (`StreamParser::with_outside_whitespace`).
+    pub(crate) outside_whitespace: bool,
     /// Stray text before the root whose last run of name characters
     /// reached the end of its text token, by where the run starts. What
     /// follows decides the error (see `stray_text`).
@@ -143,6 +146,7 @@ impl<'l> State<'l> {
             entity_mode: false,
             external_refs: false,
             open_entities: Vec::new(),
+            outside_whitespace: false,
             pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
@@ -529,7 +533,11 @@ impl<'l> State<'l> {
                         }
                         return self.stray_text(s, i);
                     }
-                    // Whitespace in the prolog/epilog is silently absorbed.
+                    // Whitespace in the prolog/epilog is absorbed, unless asked
+                    // for.
+                    if self.outside_whitespace && !s.is_empty() {
+                        return self.emit(Event::Whitespace(normalize_newlines(s)), out);
+                    }
                     return Ok(());
                 }
                 self.emit(Event::Text(normalize_newlines(s)), out)

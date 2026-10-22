@@ -76,6 +76,31 @@ static void *my_malloc(size_t n) { mallocs++; return malloc(n); }
 static void *my_realloc(void *x, size_t n) { return realloc(x, n); }
 static void my_free(void *x) { if (x) frees++; free(x); }
 
+static void parse_whole(const char *label, const char *doc);
+
+/* Markers for the default-handler tests: which handler took what. */
+static void m_sd(void *u, const XML_Char *n, const XML_Char *sy, const XML_Char *pu, int h) { printf("{start-doctype}\n"); }
+static void m_ed(void *u) { printf("{end-doctype}\n"); }
+static void m_el(void *u, const XML_Char *n, XML_Content *c) { printf("{element-decl}\n"); XML_FreeContentModel(p, c); }
+static void m_at(void *u, const XML_Char *e, const XML_Char *a, const XML_Char *t, const XML_Char *d, int r) { printf("{attlist-decl}\n"); }
+static void m_en(void *u, const XML_Char *n, int pe, const XML_Char *v, int vl, const XML_Char *b, const XML_Char *sy,
+                 const XML_Char *pu, const XML_Char *no) { printf("{entity-decl}\n"); }
+static void m_no(void *u, const XML_Char *n, const XML_Char *b, const XML_Char *sy, const XML_Char *pu) { printf("{notation-decl}\n"); }
+/* What reaches the default handler, with 0-3 groups of other handlers set. */
+static void default_view(const char *doc, int groups) {
+  p = XML_ParserCreate(NULL);
+  XML_SetDefaultHandler(p, dflt);
+  if (groups >= 1) XML_SetDoctypeDeclHandler(p, m_sd, m_ed);
+  if (groups >= 2) {
+    XML_SetElementDeclHandler(p, m_el); XML_SetAttlistDeclHandler(p, m_at);
+    XML_SetEntityDeclHandler(p, m_en); XML_SetNotationDeclHandler(p, m_no);
+  }
+  if (groups >= 3) { XML_SetProcessingInstructionHandler(p, pi); XML_SetCommentHandler(p, comment); }
+  char label[64];
+  snprintf(label, sizeof label, "default handler view, %d handler groups", groups);
+  parse_whole(label, doc);
+}
+
 static void all_handlers(void) {
   XML_SetUserData(p, (void *)"U");
   XML_SetElementHandler(p, start, end);
@@ -200,6 +225,17 @@ int main(void) {
 
   p = XML_ParserCreate(NULL); XML_SetDefaultHandler(p, dflt);
   parse_whole("default handler only", "<?xml version='1.0'?><r a='1'>x<![CDATA[y]]><!--c--><?p q?>\n</r>");
+
+  {
+    const char *doc = "<?xml version='1.0'?>\r\n<!-- top -->\n<!DOCTYPE  r PUBLIC '-//P//EN' \"r.dtd\" [\n"
+                      "  <!ELEMENT r (#PCDATA|a|b)*>\n  <!ELEMENT a (b?,(c|d)+)*>\n"
+                      "  <!ATTLIST r x CDATA #IMPLIED y (p|q) 'p'>\n  <!ENTITY e 'v'>\n"
+                      "  <!ENTITY % pe SYSTEM 'p.ent'>\n  <!ENTITY u SYSTEM 'u' NDATA n>\n"
+                      "  <!NOTATION n PUBLIC 'n'>\n  <?pi data?>\n  <!-- c -->\n  %pe;\n]\t>\n<r/>\n\t<!-- end -->\n";
+    for (int groups = 0; groups <= 3; groups++) default_view(doc, groups);
+    default_view("<!DOCTYPE\tr\r\nSYSTEM\n'a'>\r\n<r/>", 0);
+    default_view("<!DOCTYPE r SYSTEM 'a'><r/>", 1);
+  }
 
   p = XML_ParserCreate(NULL);
   XML_SetElementHandler(p, stopping_start, end);

@@ -134,6 +134,14 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// Report whitespace outside the root element (before it and after it)
+    /// as [`Event::Whitespace`] rather than dropping it, so that, with the
+    /// other events' source text, the whole document can be reproduced.
+    pub fn with_outside_whitespace(mut self) -> Self {
+        self.state.outside_whitespace = true;
+        self
+    }
+
     /// Report references in content to external parsed entities as
     /// [`Event::ExternalEntityRef`], for the caller to read and parse with
     /// the event's [`EntityContext::parser`](crate::EntityContext::parser),

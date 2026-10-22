@@ -219,3 +219,19 @@ fn every_line_end_counts_as_one_line() {
         assert_eq!(streamed(doc.as_bytes(), &[cut], false).unwrap_err(), want, "cut {cut}");
     }
 }
+
+#[test]
+fn whitespace_outside_the_root_on_request() {
+    let doc = "<?xml version='1.0'?>\r\n<!--c-->\n<r>\n</r>\t\n";
+    let collect = |p: StreamParser<'_>| {
+        let mut p = p;
+        let mut ws = Vec::new();
+        let mut record = |e: Event<'_>| if let Event::Whitespace(w) = e { ws.push(w.into_owned()) };
+        p.feed_str(doc, &mut record).unwrap();
+        p.finish(&mut record).unwrap();
+        ws
+    };
+    assert!(collect(StreamParser::new()).is_empty(), "off by default");
+    // Line ends normalised; the whitespace inside <r> is text, not this.
+    assert_eq!(collect(StreamParser::new().with_outside_whitespace()), ["\n", "\n", "\t\n"]);
+}

@@ -105,6 +105,394 @@ default [
 ]
 default [</r>]
 OK
+=== default handler view, 0 handler groups
+default [<?xml version='1.0'?>]
+default [
+]
+default [<!-- top -->]
+default [
+]
+default [<!DOCTYPE]
+default [  ]
+default [r]
+default [ ]
+default [PUBLIC]
+default [ ]
+default ['-//P//EN']
+default [ ]
+default ["r.dtd"]
+default [ ]
+default [[]
+default [
+  ]
+default [<!ELEMENT]
+default [ ]
+default [r]
+default [ ]
+default [(]
+default [#PCDATA]
+default [|]
+default [a]
+default [|]
+default [b]
+default [)*]
+default [>]
+default [
+  ]
+default [<!ELEMENT]
+default [ ]
+default [a]
+default [ ]
+default [(]
+default [b?]
+default [,]
+default [(]
+default [c]
+default [|]
+default [d]
+default [)+]
+default [)*]
+default [>]
+default [
+  ]
+default [<!ATTLIST]
+default [ ]
+default [r]
+default [ ]
+default [x]
+default [ ]
+default [CDATA]
+default [ ]
+default [#IMPLIED]
+default [ ]
+default [y]
+default [ ]
+default [(]
+default [p]
+default [|]
+default [q]
+default [)]
+default [ ]
+default ['p']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [e]
+default [ ]
+default ['v']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [%]
+default [ ]
+default [pe]
+default [ ]
+default [SYSTEM]
+default [ ]
+default ['p.ent']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [u]
+default [ ]
+default [SYSTEM]
+default [ ]
+default ['u']
+default [ ]
+default [NDATA]
+default [ ]
+default [n]
+default [>]
+default [
+  ]
+default [<!NOTATION]
+default [ ]
+default [n]
+default [ ]
+default [PUBLIC]
+default [ ]
+default ['n']
+default [>]
+default [
+  ]
+default [<?pi data?>]
+default [
+  ]
+default [<!-- c -->]
+default [
+  ]
+default [%pe;]
+default [
+]
+default []]
+default [	]
+default [>]
+default [
+]
+default [<r/>]
+default [
+	]
+default [<!-- end -->]
+default [
+]
+OK
+=== default handler view, 1 handler groups
+default [<?xml version='1.0'?>]
+default [
+]
+default [<!-- top -->]
+default [
+]
+{start-doctype}
+default [
+  ]
+default [<!ELEMENT]
+default [ ]
+default [r]
+default [ ]
+default [(]
+default [#PCDATA]
+default [|]
+default [a]
+default [|]
+default [b]
+default [)*]
+default [>]
+default [
+  ]
+default [<!ELEMENT]
+default [ ]
+default [a]
+default [ ]
+default [(]
+default [b?]
+default [,]
+default [(]
+default [c]
+default [|]
+default [d]
+default [)+]
+default [)*]
+default [>]
+default [
+  ]
+default [<!ATTLIST]
+default [ ]
+default [r]
+default [ ]
+default [x]
+default [ ]
+default [CDATA]
+default [ ]
+default [#IMPLIED]
+default [ ]
+default [y]
+default [ ]
+default [(]
+default [p]
+default [|]
+default [q]
+default [)]
+default [ ]
+default ['p']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [e]
+default [ ]
+default ['v']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [%]
+default [ ]
+default [pe]
+default [ ]
+default [SYSTEM]
+default [ ]
+default ['p.ent']
+default [>]
+default [
+  ]
+default [<!ENTITY]
+default [ ]
+default [u]
+default [ ]
+default [SYSTEM]
+default [ ]
+default ['u']
+default [ ]
+default [NDATA]
+default [ ]
+default [n]
+default [>]
+default [
+  ]
+default [<!NOTATION]
+default [ ]
+default [n]
+default [ ]
+default [PUBLIC]
+default [ ]
+default ['n']
+default [>]
+default [
+  ]
+default [<?pi data?>]
+default [
+  ]
+default [<!-- c -->]
+default [
+  ]
+default [%pe;]
+default [
+]
+{end-doctype}
+default [
+]
+default [<r/>]
+default [
+	]
+default [<!-- end -->]
+default [
+]
+OK
+=== default handler view, 2 handler groups
+default [<?xml version='1.0'?>]
+default [
+]
+default [<!-- top -->]
+default [
+]
+{start-doctype}
+default [
+  ]
+{element-decl}
+default [
+  ]
+{element-decl}
+default [
+  ]
+{attlist-decl}
+{attlist-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{notation-decl}
+default [
+  ]
+default [<?pi data?>]
+default [
+  ]
+default [<!-- c -->]
+default [
+  ]
+default [%pe;]
+default [
+]
+{end-doctype}
+default [
+]
+default [<r/>]
+default [
+	]
+default [<!-- end -->]
+default [
+]
+OK
+=== default handler view, 3 handler groups
+default [<?xml version='1.0'?>]
+default [
+]
+comment [ top ]
+    @2:0 byte=23
+default [
+]
+{start-doctype}
+default [
+  ]
+{element-decl}
+default [
+  ]
+{element-decl}
+default [
+  ]
+{attlist-decl}
+{attlist-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{entity-decl}
+default [
+  ]
+{notation-decl}
+default [
+  ]
+pi pi [data]
+    @11:2 byte=291
+default [
+  ]
+comment [ c ]
+    @12:2 byte=305
+default [
+  ]
+default [%pe;]
+default [
+]
+{end-doctype}
+default [
+]
+default [<r/>]
+default [
+	]
+comment [ end ]
+    @16:1 byte=333
+default [
+]
+OK
+=== default handler view, 0 handler groups
+default [<!DOCTYPE]
+default [	]
+default [r]
+default [
+]
+default [SYSTEM]
+default [
+]
+default ['a']
+default [>]
+default [
+]
+default [<r/>]
+OK
+=== default handler view, 1 handler groups
+{start-doctype}
+{end-doctype}
+default [<r/>]
+OK
 === stop from handler
 start r
 start stop
