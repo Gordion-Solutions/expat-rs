@@ -39,6 +39,9 @@ See the safety notes at the top of `src/lib.rs`.
 
 ## CPython
 
+See [CPYTHON_STATUS.md](CPYTHON_STATUS.md) for the full record and
+`tools/cpython.sh` to reproduce it.
+
 CPython 3.14 builds against expat-capi (`./configure --with-system-expat
 LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
 -Wl,-rpath,<staged dir> -lexpat"`) and, on 21 Oct 2026 (macOS, debug build):
