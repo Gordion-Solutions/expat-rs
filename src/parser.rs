@@ -662,7 +662,8 @@ impl<'a> Parser<'a> {
         loop {
             if let Some((event, span)) = self.out.pop_front() {
                 let raw = self.src.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
-                return Ok(Some(Located { event, span, raw }));
+                // The input is the text itself.
+                return Ok(Some(Located { event, span, raw, input_start: span.start.byte_offset }));
             }
             if self.done {
                 return Ok(None);

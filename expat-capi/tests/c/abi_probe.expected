@@ -152,7 +152,48 @@ ERROR 18 'unknown encoding' @1:30
 === no handler for encoding
 ERROR 18 'unknown encoding' @1:30
 === protocol encoding overrides declaration
+xmldecl 1.0 utf-8 -1
+start r ud=U spec=0
+    @1:38 byte=38
 text [café]
+end r
+    @1:45 byte=45
+OK
+=== byte index in UTF-16
+start r ud=U spec=0
+    @1:1 byte=2
+text [é]
+start x ud=U spec=0
+    @1:5 byte=10
+end x
+    @1:9 byte=18
+text [𝄞]
+start y ud=U spec=0
+    @1:10 byte=22
+end y
+    @1:14 byte=30
+end r
+    @1:14 byte=30
+OK
+=== byte index in Latin-1
+xmldecl 1.0 iso-8859-1 -1
+start r ud=U spec=0
+    @1:43 byte=43
+text [éé]
+start x ud=U spec=0
+    @1:48 byte=48
+end x
+    @1:52 byte=52
+text [é]
+text [
+]
+text [é]
+start y ud=U spec=0
+    @2:1 byte=55
+end y
+    @2:5 byte=59
+end r
+    @2:5 byte=59
 OK
 === memory suite for content models
 doctype d sys=(null) pub=(null) internal=1

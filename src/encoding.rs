@@ -349,6 +349,18 @@ impl StreamDecoder {
         Ok(())
     }
 
+    /// How many bytes of input `text`, decoded by this decoder, came from:
+    /// its length in UTF-8 and ASCII, one byte per character in single-byte
+    /// encodings, two or four per character in UTF-16. (Before the encoding
+    /// is known, and for text fed as text, its length.)
+    pub(crate) fn input_len(&self, text: &str) -> usize {
+        match &self.kind {
+            None | Some(Kind::Bit8(Kind8::Utf8 | Kind8::Ascii)) => text.len(),
+            Some(Kind::Bit8(Kind8::Latin1) | Kind::Map(_)) => text.chars().count(),
+            Some(Kind::Utf16(_)) => text.chars().map(|c| if c as u32 > 0xFFFF { 4 } else { 2 }).sum(),
+        }
+    }
+
     /// Choose the decoding from the start of the input, or `None` if more
     /// of it is needed first.
     fn detect(&mut self, last: bool, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>) -> Result<Option<Kind>> {

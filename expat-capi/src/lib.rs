@@ -224,6 +224,10 @@ pub struct Shim {
     /// Position reported by `XML_GetCurrent*`: the start of the event being
     /// delivered, the error, or the end of what has been parsed.
     pos: Cell<Position>,
+    /// `pos` and `token_end` in input bytes (before decoding), for
+    /// `XML_GetCurrentByteIndex` and `XML_GetCurrentByteCount`.
+    input_pos: Cell<usize>,
+    input_end: Cell<usize>,
     /// `XML_GetSpecifiedAttributeCount` for the current start tag.
     specified_atts: Cell<c_int>,
     /// Set by `XML_StopParser`; checked after every callback.
@@ -314,6 +318,8 @@ impl Shim {
             error: Cell::new(XML_ERROR_NONE),
             pos: Cell::new(Position::start()),
             specified_atts: Cell::new(0),
+            input_pos: Cell::new(0),
+            input_end: Cell::new(0),
             stop_requested: Cell::new(false),
             current_span: Cell::new(None),
             token_end: Cell::new(Position::start()),
@@ -394,6 +400,9 @@ impl Shim {
         };
         if let Some(enc) = self.encoding.borrow().as_deref() {
             p = p.with_encoding(enc);
+            if enc.to_ascii_uppercase().starts_with("UTF-16") {
+                self.utf16.set(true);
+            }
         }
         self.chunk_text.set(self.converts(None));
         let (handler, data) = self.unknown_encoding.get();
@@ -443,9 +452,12 @@ impl Shim {
             result = parser.finish_located(&mut deliver);
         }
         let parsed_to = parser.position();
+        let parsed_input = parser.input_offset(parsed_to);
+        let error_input = result.as_ref().err().map(|e| parser.input_offset(e.position()));
         drop(core);
         if self.stop_requested.get() {
             self.pos.set(self.token_end.get());
+            self.input_pos.set(self.input_end.get());
             self.error.set(self.stop_error.get());
             self.status.set(Status::Failed);
             return XML_STATUS_ERROR;
@@ -453,6 +465,7 @@ impl Shim {
         match result {
             Ok(()) => {
                 self.pos.set(parsed_to);
+                self.input_pos.set(parsed_input);
                 if is_final {
                     self.status.set(Status::Finished);
                 }
@@ -460,6 +473,7 @@ impl Shim {
             }
             Err(e) => {
                 self.fail(&e);
+                self.input_pos.set(error_input.unwrap_or(parsed_input));
                 XML_STATUS_ERROR
             }
         }
@@ -674,6 +688,8 @@ impl Shim {
         self.pos.set(l.span.start);
         self.current_span.set(Some(l.span));
         self.token_end.set(l.span.end);
+        self.input_pos.set(l.input_start);
+        self.input_end.set(l.input_start + self.input_len(l.raw));
         if self.handlers.default.get().is_some() {
             if let Ok(mut raw) = self.current_raw.try_borrow_mut() {
                 raw.clear();
@@ -788,6 +804,7 @@ impl Shim {
                     // An empty element's end comes at the end of its tag
                     // once the start has gone to a start handler.
                     self.pos.set(l.span.end);
+                    self.input_pos.set(self.input_end.get());
                 }
                 match h.end_element.get() {
                     // SAFETY: registered EndElementHandler; valid C string.
@@ -800,11 +817,12 @@ impl Shim {
                     None => {}
                 }
             }
-            Event::Text(text) => self.character_data(&text, l.raw, l.span.start),
+            Event::Text(text) => self.character_data(&text, l.raw, l.span.start, l.input_start),
             Event::CData(text) => {
                 const OPEN: &str = "<![CDATA[";
                 let content_raw = l.raw.get(OPEN.len()..l.raw.len().saturating_sub(3)).unwrap_or("");
                 let content_at = l.span.start.advance(OPEN);
+                let content_input = l.input_start + self.input_len(OPEN);
                 match h.start_cdata.get() {
                     // SAFETY: registered StartCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
@@ -815,12 +833,14 @@ impl Shim {
                 if self.stop_requested.get() {
                     return;
                 }
-                self.character_data(&text, content_raw, content_at);
+                self.character_data(&text, content_raw, content_at, content_input);
                 if self.stop_requested.get() {
                     return;
                 }
                 self.pos.set(content_at.advance(content_raw));
+                self.input_pos.set(content_input + self.input_len(content_raw));
                 self.token_end.set(l.span.end);
+                self.input_end.set(l.input_start + self.input_len(l.raw));
                 match h.end_cdata.get() {
                     // SAFETY: registered EndCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
@@ -946,6 +966,7 @@ impl Shim {
                     if unsafe { f(me, key.as_ptr(), ptr_of(&base), s.as_ptr(), ptr_of(&p)) } == 0 {
                         // Reported at the reference, as libexpat does.
                         self.token_end.set(self.pos.get());
+                        self.input_end.set(self.input_pos.get());
                         self.stop_error.set(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
                         self.stop_requested.set(true);
                     }
@@ -1016,7 +1037,7 @@ impl Shim {
         }
     }
 
-    fn character_data(&self, text: &str, raw: &str, start: Position) {
+    fn character_data(&self, text: &str, raw: &str, start: Position, start_input: usize) {
         let from_source = if raw.contains('\r') {
             raw.replace("\r\n", "\n").replace('\r', "\n") == text
         } else {
@@ -1024,7 +1045,7 @@ impl Shim {
         };
         if from_source {
             let bytes = raw.as_bytes();
-            let (mut at, mut piece_start, mut i) = (start, 0, 0);
+            let (mut at, mut piece_start, mut i) = ((start, start_input), 0, 0);
             while i < bytes.len() {
                 if bytes[i] != b'\n' && bytes[i] != b'\r' {
                     i += 1;
@@ -1058,6 +1079,7 @@ impl Shim {
                 for part in [body, eol] {
                     if !part.is_empty() && !self.stop_requested.get() {
                         self.pos.set(start);
+                        self.input_pos.set(start_input);
                         self.deliver_chars(part, raw);
                     }
                 }
@@ -1065,14 +1087,29 @@ impl Shim {
         }
     }
 
-    /// One piece of character data from the source at `at`; returns the
-    /// position after it.
-    fn char_piece(&self, text: &str, raw: &str, at: Position) -> Position {
-        let end = at.advance(raw);
-        self.pos.set(at);
-        self.token_end.set(end);
+    /// One piece of character data from the source at `at` (position,
+    /// input offset); returns the place after it.
+    fn char_piece(&self, text: &str, raw: &str, at: (Position, usize)) -> (Position, usize) {
+        let end = (at.0.advance(raw), at.1 + self.input_len(raw));
+        self.pos.set(at.0);
+        self.input_pos.set(at.1);
+        self.token_end.set(end.0);
+        self.input_end.set(end.1);
         self.deliver_chars(text, raw);
         end
+    }
+
+    /// Bytes of input that decoded text `s` came from (see
+    /// `Located::input_start`): two or four per character in UTF-16, one
+    /// in the single-byte encodings libexpat converts, else its length.
+    fn input_len(&self, s: &str) -> usize {
+        if self.utf16.get() {
+            s.chars().map(|c| if c as u32 > 0xFFFF { 4 } else { 2 }).sum()
+        } else if self.chunk_text.get() {
+            s.chars().count()
+        } else {
+            s.len()
+        }
     }
 
     fn deliver_chars(&self, text: &str, raw: &str) {
@@ -1337,8 +1374,9 @@ pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> XML_S
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> XML_Index {
+    // In bytes of input, before decoding, as libexpat counts.
     // SAFETY: see `shim`.
-    unsafe { shim(parser) }.map_or(-1, |p| p.pos.get().byte_offset as XML_Index)
+    unsafe { shim(parser) }.map_or(-1, |p| p.input_pos.get() as XML_Index)
 }
 
 #[no_mangle]
@@ -1360,7 +1398,7 @@ pub unsafe extern "C" fn XML_GetCurrentByteCount(parser: XML_Parser) -> c_int {
     if p.status.get() != Status::Parsing {
         return 0;
     }
-    (p.token_end.get().byte_offset.saturating_sub(p.pos.get().byte_offset)) as c_int
+    p.input_end.get().saturating_sub(p.input_pos.get()) as c_int
 }
 
 #[no_mangle]

@@ -251,9 +251,19 @@ int main(void) {
   p = XML_ParserCreate(NULL); text_only();
   parse_whole("no handler for encoding", "<?xml version='1.0' encoding='x-test'?><r/>");
 
-  p = XML_ParserCreate("ISO-8859-1"); text_only();
+  p = XML_ParserCreate("ISO-8859-1"); all_handlers();
   parse_whole("protocol encoding overrides declaration", "<?xml version='1.0' encoding='utf-8'?><r>caf\xe9</r>");
 
+  {
+    /* Byte indexes count input bytes: UTF-16 and Latin-1 documents. */
+    const char u16[] = "\xff\xfe<\0r\0>\0\xe9\0<\0x\0/\0>\0\x34\xd8\x1e\xdd<\0y\0/\0>\0<\0/\0r\0>\0";
+    p = XML_ParserCreate(NULL); all_handlers();
+    printf("=== byte index in UTF-16\n");
+    report(XML_Parse(p, u16, (int)sizeof u16 - 1, 1) == XML_STATUS_OK);
+    XML_ParserFree(p);
+    p = XML_ParserCreate(NULL); all_handlers();
+    parse_whole("byte index in Latin-1", "<?xml version='1.0' encoding='iso-8859-1'?><r>\xe9\xe9<x/>\xe9\n\xe9<y/></r>");
+  }
   {
     XML_Memory_Handling_Suite ms = {my_malloc, my_realloc, my_free};
     p = XML_ParserCreate_MM(NULL, &ms, NULL); all_handlers();

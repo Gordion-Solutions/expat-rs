@@ -76,8 +76,6 @@ both tools use libexpat only as a black box.
 - Default handler: whitespace outside the root element isn't passed to it,
   and a DOCTYPE (when there is no DOCTYPE handler) arrives in one piece
   rather than token by token.
-- `XML_GetCurrentByteIndex` counts bytes of the document decoded to UTF-8,
-  so it differs from libexpat for documents in other encodings.
 - With an unknown encoding, libexpat calls the XML-declaration handler
   before the unknown-encoding handler; expat-capi calls it after.
 - Multi-byte unknown encodings (`XML_Encoding.convert`) are refused.
