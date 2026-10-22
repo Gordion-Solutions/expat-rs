@@ -529,15 +529,25 @@ end r
     @1:23 byte=23
 OK
 === unknown encoding via map
+xmldecl 1.0 x-test -1
 unknown-encoding x-test data=D
+start r ud=U spec=0
+    @1:39 byte=39
 text [Ąz]
+end r
+    @1:44 byte=44
 OK
 === byte invalid in map
+xmldecl 1.0 x-test -1
 unknown-encoding x-test data=D
+start r ud=U spec=0
+    @1:39 byte=39
 ERROR 4 'not well-formed (invalid token)' @1:42
 === handler refuses encoding
+xmldecl 1.0 x-test -1
 ERROR 18 'unknown encoding' @1:30
 === no handler for encoding
+xmldecl 1.0 x-test -1
 ERROR 18 'unknown encoding' @1:30
 === protocol encoding overrides declaration
 xmldecl 1.0 utf-8 -1

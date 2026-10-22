@@ -73,8 +73,6 @@ both tools use libexpat only as a black box.
 
 ## Not yet matching libexpat
 
-- With an unknown encoding, libexpat calls the XML-declaration handler
-  before the unknown-encoding handler; expat-capi calls it after.
 - Multi-byte unknown encodings (`XML_Encoding.convert`) are refused.
 - External DTD subsets and external parameter entities aren't read: a
   parser from `XML_ExternalEntityParserCreate` with a NULL context accepts

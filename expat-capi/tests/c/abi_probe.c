@@ -119,13 +119,6 @@ static void all_handlers(void) {
   XML_SetNamespaceDeclHandler(p, sns, ens);
 }
 
-/* Only character data: for documents whose positions or declaration
-   order aren't compared yet (non-UTF-8 byte indexes; see README.md). */
-static void text_only(void) {
-  XML_SetUserData(p, (void *)"U");
-  XML_SetCharacterDataHandler(p, text);
-}
-
 static void report(int ok) {
   if (ok) printf("OK\n");
   else printf("ERROR %d '%s' @%lu:%lu\n", XML_GetErrorCode(p), XML_ErrorString(XML_GetErrorCode(p)),
@@ -275,16 +268,16 @@ int main(void) {
   }
   XML_ParserFree(p);
 
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, latin2_ish, (void *)"D");
   parse_whole("unknown encoding via map", "<?xml version='1.0' encoding='x-test'?><r>\xa1z</r>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, latin2_ish, (void *)"D");
   parse_whole("byte invalid in map", "<?xml version='1.0' encoding='x-test'?><r>\xff</r>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, refuse_encoding, NULL);
   parse_whole("handler refuses encoding", "<?xml version='1.0' encoding='x-test'?><r/>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   parse_whole("no handler for encoding", "<?xml version='1.0' encoding='x-test'?><r/>");
 
   p = XML_ParserCreate("ISO-8859-1"); all_handlers();

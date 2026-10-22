@@ -277,6 +277,11 @@ pub struct Shim {
     doctype_ids: RefCell<Option<(Option<CString>, Option<CString>)>>,
     /// The foreign DTD (`XML_UseForeignDTD`) has been asked for.
     foreign_dtd_done: Cell<bool>,
+    /// The start of the input (up to 1 KiB), from which the XML declaration
+    /// is read early when the document's encoding is unknown, and whether
+    /// that was delivered (see `early_xml_decl`).
+    prolog: RefCell<Vec<u8>>,
+    xml_decl_early: Cell<bool>,
     /// The first bytes of input, until it is known whether they are a
     /// byte order mark, and whether they were (libexpat counts a byte
     /// order mark as a column on line 1; expat-rs doesn't).
@@ -351,6 +356,8 @@ impl Shim {
             dtd_text: RefCell::new(None),
             foreign_dtd_done: Cell::new(false),
             head: RefCell::new(Vec::new()),
+            prolog: RefCell::new(Vec::new()),
+            xml_decl_early: Cell::new(false),
             bom: Cell::new(None),
             utf16: Cell::new(false),
             chunk_text: Cell::new(false),
@@ -422,10 +429,15 @@ impl Shim {
         }
         self.chunk_text.set(self.converts(None));
         let (handler, data) = self.unknown_encoding.get();
-        if let Some(handler) = handler {
-            p = p.with_unknown_encoding(move |name| byte_map_from_c(handler, data, name));
-        }
-        p
+        let this: *const Shim = self;
+        p.with_unknown_encoding(move |name| {
+            // SAFETY: the parser this closure belongs to is owned by the
+            // Shim at `this` (in `core`), which is heap-allocated and not
+            // moved, and calls it only while parsing, inside a call on that
+            // Shim; only shared access is used.
+            unsafe { &*this }.early_xml_decl();
+            handler.and_then(|handler| byte_map_from_c(handler, data, name))
+        })
     }
 
     /// Feed input (and finish it when `is_final`), delivering callbacks.
@@ -449,6 +461,10 @@ impl Shim {
             return XML_STATUS_ERROR;
         };
         self.note_bom(input, is_final);
+        if let Ok(mut prolog) = self.prolog.try_borrow_mut() {
+            let room = 1024usize.saturating_sub(prolog.len());
+            prolog.extend(input.iter().take(room));
+        }
         let parser = core.get_or_insert_with(|| self.make_parser());
         self.status.set(Status::Parsing);
         let mut deliver = |l: Located<'_>| {
@@ -504,6 +520,27 @@ impl Shim {
             None => self.utf16.get(),
             Some(enc) => !["UTF-8", "US-ASCII", "ASCII"].iter().any(|n| enc.eq_ignore_ascii_case(n)),
         }
+    }
+
+    /// The document declares an encoding expat-capi doesn't know: as
+    /// libexpat does, deliver the XML declaration (ASCII in any encoding
+    /// that could work) before the unknown-encoding handler is asked, and
+    /// whether or not one is set. Not for an encoding the caller chose,
+    /// which is settled before any declaration is read.
+    fn early_xml_decl(&self) {
+        if self.encoding.borrow().is_some() || self.xml_decl_early.get() {
+            return;
+        }
+        let Some(f) = self.handlers.xml_decl.get() else { return };
+        let Ok(prolog) = self.prolog.try_borrow() else { return };
+        let Some((version, encoding, standalone)) = parse_xml_decl(&prolog) else { return };
+        drop(prolog);
+        self.xml_decl_early.set(true);
+        let (v, e) = (opt_cstr(version.as_deref()), opt_cstr(encoding.as_deref()));
+        self.pos.set(Position::start());
+        self.input_pos.set(0);
+        // SAFETY: registered XmlDeclHandler; valid C strings (or null).
+        unsafe { f(self.ud(), ptr_of(&v), ptr_of(&e), standalone) };
     }
 
     /// Watch the first bytes of input for a byte order mark.
@@ -563,6 +600,30 @@ fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *
         unsafe { release(info.data) };
     }
     map
+}
+
+/// The pseudo-attributes of an XML declaration at the start of `bytes`:
+/// (version, encoding, standalone as libexpat passes it: 1, 0 or -1).
+fn parse_xml_decl(bytes: &[u8]) -> Option<(Option<String>, Option<String>, c_int)> {
+    let text = String::from_utf8_lossy(bytes);
+    let body = text.strip_prefix("<?xml")?;
+    let body = &body[..body.find("?>")?];
+    let (mut version, mut encoding, mut standalone) = (None, None, -1);
+    let mut rest = body.trim_start();
+    while !rest.is_empty() {
+        let (name, after) = rest.split_once('=')?;
+        let after = after.trim_start();
+        let quote = after.chars().next().filter(|q| matches!(q, '"' | '\''))?;
+        let (value, after) = after[1..].split_once(quote)?;
+        match name.trim() {
+            "version" => version = Some(value.to_string()),
+            "encoding" => encoding = Some(value.to_string()),
+            "standalone" => standalone = (value == "yes") as c_int,
+            _ => return None,
+        }
+        rest = after.trim_start();
+    }
+    Some((version, encoding, standalone))
 }
 
 /// Length of a DOCTYPE's header: through the `[` that opens its internal
@@ -802,6 +863,8 @@ impl Shim {
         let h = &self.handlers;
         let ud = self.ud();
         match l.event {
+            // Delivered already, ahead of the unknown-encoding handler.
+            Event::XmlDecl(_) if self.xml_decl_early.get() => {}
             Event::XmlDecl(d) => match h.xml_decl.get() {
                 Some(f) => {
                     // A text declaration may have no version: NULL, as in
