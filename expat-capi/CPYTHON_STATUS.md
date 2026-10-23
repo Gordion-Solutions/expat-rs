@@ -24,6 +24,8 @@ libexpat side by side, same skips on both):
 | 3.13 | macOS 13.7 x86_64 | 1087 pass | 1087 pass (2.8.2) |
 | 3.14 | macOS 13.7 x86_64 | 1088 pass | 1088 pass (2.8.2) |
 | 3.14 | Linux (Debian trixie, x86_64, gcc) | 1088 pass | 1088 pass (2.9.0) |
+| 3.14, AddressSanitizer build | Linux (Debian trixie, x86_64, gcc) | 1088 pass, no sanitizer reports | |
+| 3.15 (3.15.1+) | macOS 13.7 x86_64 | 1103 pass | 1103 pass (2.8.2) |
 | main (3.16.0a1+, `b1e32ff`) | macOS 13.7 x86_64 | 1179 pass | 1179 pass (2.8.2) |
 
 CPython's development branch added multi-byte encodings through libexpat's
@@ -99,5 +101,5 @@ used) and fixed in expat-rs or expat-capi:
 
 ## Not yet checked
 
-CPython 3.15, release (non-debug) builds, CPython itself under
-AddressSanitizer, and other architectures (arm64).
+Release (non-debug) builds, other architectures (arm64), and CPython's
+whole test suite on versions other than 3.14 on macOS.
