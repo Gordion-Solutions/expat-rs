@@ -8,6 +8,7 @@
 //! declared encoding is an [`XmlError::Encoding`] error.
 
 use std::borrow::Cow;
+use std::fmt;
 
 use crate::error::{ErrorKind, Position, Result, XmlError};
 
@@ -101,7 +102,7 @@ enum Kind8 {
 /// Choose the decoding for 8-bit input from its first bytes: a UTF-8 byte
 /// order mark and the encoding declaration, if any.
 fn choose_8bit(bytes: &[u8]) -> Result<Kind8> {
-    match choose_8bit_or_unknown(bytes)? {
+    match choose_8bit_or_unknown(bytes, false)? {
         Ok(kind) => Ok(kind),
         Err((name, pos)) => Err(unknown_encoding(&name, pos)),
     }
@@ -114,7 +115,11 @@ fn unknown_encoding(name: &str, pos: Position) -> XmlError {
 /// As `choose_8bit`, but an encoding name it doesn't support comes back as
 /// `Err((name, where it is declared))` for the caller to resolve (see
 /// `ByteMap`).
-fn choose_8bit_or_unknown(bytes: &[u8]) -> Result<std::result::Result<Kind8, (String, Position)>> {
+///
+/// `lenient_bom`: after a UTF-8 byte order mark, follow a declaration naming
+/// another encoding (not UTF-16) instead of rejecting it; the caller then
+/// drops the mark before decoding.
+fn choose_8bit_or_unknown(bytes: &[u8], lenient_bom: bool) -> Result<std::result::Result<Kind8, (String, Position)>> {
     let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     // The declaration itself is ASCII in every supported 8-bit encoding.
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(256)]);
@@ -126,7 +131,9 @@ fn choose_8bit_or_unknown(bytes: &[u8]) -> Result<std::result::Result<Kind8, (St
     let declared = written.map(str::to_ascii_uppercase);
     match declared.as_deref() {
         None | Some("UTF-8") => Ok(Ok(Kind8::Utf8)),
-        Some(enc) if has_bom => Err(error_at(pos, ErrorKind::IncorrectEncoding, format!("document has a UTF-8 byte order mark but declares encoding {enc:?}"))),
+        Some(enc) if has_bom && !(lenient_bom && !is_utf16(enc)) => {
+            Err(error_at(pos, ErrorKind::IncorrectEncoding, format!("document has a UTF-8 byte order mark but declares encoding {enc:?}")))
+        }
         Some(enc) if is_utf16(enc) => Err(error_at(pos, ErrorKind::IncorrectEncoding, "UTF-16 documents must begin with a byte order mark".into())),
         Some("US-ASCII" | "ASCII") => Ok(Ok(Kind8::Ascii)),
         Some("ISO-8859-1" | "ISO_8859-1" | "LATIN1") => Ok(Ok(Kind8::Latin1)),
@@ -197,23 +204,61 @@ fn declared_encoding(text: &str) -> Option<&str> {
     Some(&value[..value.find(quote)?])
 }
 
-/// A single-byte encoding as a table from byte to character (`None`: the
-/// byte is not valid in the encoding). Supplied by the caller for an
-/// encoding expat-rs doesn't know, as libexpat's unknown-encoding handler
-/// supplies its `map`.
-pub type ByteMap = Box<[Option<char>; 256]>;
+/// What one byte is in an [`EncodingMap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapEntry {
+    /// The byte is this character.
+    Char(char),
+    /// The byte isn't valid in the encoding.
+    Invalid,
+    /// The byte starts a sequence of this many bytes (2 to 4), which the
+    /// map's converter decodes.
+    Lead(u8),
+}
+
+/// A sequence converter for an [`EncodingMap`]: the character a whole
+/// multi-byte sequence stands for, or `None` if it isn't valid.
+pub type SequenceConverter = Box<dyn FnMut(&[u8]) -> Option<char> + Send>;
+
+/// An encoding expat-rs doesn't know, described by the caller: what each
+/// byte is and, for a multi-byte encoding, how whole sequences decode. As
+/// libexpat's unknown-encoding handler supplies `map` and `convert`.
+pub struct EncodingMap {
+    entries: Box<[MapEntry; 256]>,
+    convert: Option<SequenceConverter>,
+}
+
+impl EncodingMap {
+    /// A single-byte encoding: each byte's character, `None` for bytes
+    /// that aren't valid in it.
+    pub fn single_byte(table: [Option<char>; 256]) -> Self {
+        Self { entries: Box::new(table.map(|c| c.map_or(MapEntry::Invalid, MapEntry::Char))), convert: None }
+    }
+
+    /// A multi-byte encoding: what each byte is, and `convert` for the
+    /// sequences [`MapEntry::Lead`] bytes start (given the whole sequence).
+    /// A lead length outside 2 to 4 makes that byte invalid.
+    pub fn multi_byte(entries: [MapEntry; 256], convert: impl FnMut(&[u8]) -> Option<char> + Send + 'static) -> Self {
+        Self { entries: Box::new(entries), convert: Some(Box::new(convert)) }
+    }
+}
+
+impl fmt::Debug for EncodingMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncodingMap").field("multi_byte", &self.convert.is_some()).finish_non_exhaustive()
+    }
+}
 
 /// A caller-supplied resolver for unknown encodings: given the encoding's
-/// name, a [`ByteMap`] for it, or `None` if it can't be supported.
-pub type UnknownEncodingHandler<'l> = Box<dyn FnMut(&str) -> Option<ByteMap> + 'l>;
+/// name, an [`EncodingMap`] for it, or `None` if it can't be supported.
+pub type UnknownEncodingHandler<'l> = Box<dyn FnMut(&str) -> Option<EncodingMap> + 'l>;
 
 /// How a [`StreamDecoder`] decodes, once it has seen enough input.
-#[derive(Clone)]
 enum Kind {
     Bit8(Kind8),
     /// UTF-16, big-endian if true.
     Utf16(bool),
-    Map(ByteMap),
+    Map(EncodingMap),
 }
 
 /// Incremental version of [`decode`], for input that arrives in chunks: a
@@ -232,6 +277,9 @@ pub struct StreamDecoder {
     /// Encoding chosen by the caller, overriding detection and the
     /// document's declaration (libexpat's protocol encoding).
     forced: Option<String>,
+    /// Follow an encoding declaration after a UTF-8 byte order mark, as
+    /// libexpat does (see `StreamParser::with_libexpat_leniency`).
+    pub(crate) lenient_bom: bool,
 }
 
 impl StreamDecoder {
@@ -256,7 +304,7 @@ impl StreamDecoder {
         self.decode_with(bytes, last, out, &mut |_| None)
     }
 
-    /// As [`decode`](Self::decode), asking `unknown` for a [`ByteMap`] when
+    /// As [`decode`](Self::decode), asking `unknown` for an [`EncodingMap`] when
     /// the declared (or forced) encoding is one expat-rs doesn't know;
     /// `None` makes it an unknown-encoding error. Called at most once.
     pub fn decode_with(
@@ -264,7 +312,7 @@ impl StreamDecoder {
         bytes: &[u8],
         last: bool,
         out: &mut String,
-        unknown: &mut dyn FnMut(&str) -> Option<ByteMap>,
+        unknown: &mut dyn FnMut(&str) -> Option<EncodingMap>,
     ) -> Result<()> {
         self.pending.extend_from_slice(bytes);
         if self.kind.is_none() {
@@ -273,26 +321,45 @@ impl StreamDecoder {
                 None => return Ok(()), // need more of the start
             }
         }
-        let kind = self.kind.as_ref().expect("set above");
+        let kind = self.kind.as_mut().expect("set above");
         let start = out.len();
         let used = match kind {
             Kind::Map(map) => {
                 // Characters before a bad byte stay in `out`, for the caller
-                // to parse before reporting it.
-                for (i, &b) in self.pending.iter().enumerate() {
-                    match map[b as usize] {
-                        Some(c) => out.push(c),
-                        None => return Err(error(ErrorKind::InvalidToken, format!(
-                            "byte {b:#04x} at offset {} is not valid in the document's encoding", self.offset + i))),
+                // to parse before reporting it; a sequence cut off by the end
+                // of this chunk waits for the next.
+                let p = &self.pending;
+                let mut i = 0;
+                while i < p.len() {
+                    let bad = |i: usize| error(ErrorKind::InvalidToken, format!(
+                        "byte {:#04x} at offset {} is not valid in the document's encoding", p[i], self.offset + i));
+                    match map.entries[p[i] as usize] {
+                        MapEntry::Char(c) => {
+                            out.push(c);
+                            i += 1;
+                        }
+                        MapEntry::Lead(n @ 2..=4) => {
+                            let n = n as usize;
+                            if i + n > p.len() {
+                                break;
+                            }
+                            match map.convert.as_mut().and_then(|convert| convert(&p[i..i + n])) {
+                                Some(c) => out.push(c),
+                                None => return Err(bad(i)),
+                            }
+                            i += n;
+                        }
+                        MapEntry::Lead(_) | MapEntry::Invalid => return Err(bad(i)),
                     }
                 }
-                self.pending.len()
+                i
             }
             Kind::Bit8(Kind8::Latin1) => {
                 out.extend(self.pending.iter().map(|&b| b as char));
                 self.pending.len()
             }
-            &Kind::Bit8(k) => {
+            Kind::Bit8(k) => {
+                let k = *k;
                 let (valid, bad) = match std::str::from_utf8(&self.pending) {
                     Ok(s) => (s.len(), None),
                     Err(e) if e.error_len().is_some() => (e.valid_up_to(), Some(
@@ -313,8 +380,8 @@ impl StreamDecoder {
                 out.push_str(std::str::from_utf8(&self.pending[..valid]).expect("validated above"));
                 valid
             }
-            &Kind::Utf16(be) => {
-                let unit = utf16_unit(be);
+            Kind::Utf16(be) => {
+                let unit = utf16_unit(*be);
                 let mut n = self.pending.len() / 2 * 2;
                 // Keep a trailing high surrogate for its partner.
                 if n >= 2 && !last && (0xD800..0xDC00).contains(&unit([self.pending[n - 2], self.pending[n - 1]])) {
@@ -362,6 +429,7 @@ impl StreamDecoder {
     pub(crate) fn input_len(&self, text: &str) -> usize {
         match &self.kind {
             None | Some(Kind::Bit8(Kind8::Utf8 | Kind8::Ascii)) => text.len(),
+            // (A multi-byte map's sequences count as one byte each here.)
             Some(Kind::Bit8(Kind8::Latin1) | Kind::Map(_)) => text.chars().count(),
             Some(Kind::Utf16(_)) => text.chars().map(|c| if c as u32 > 0xFFFF { 4 } else { 2 }).sum(),
         }
@@ -369,10 +437,10 @@ impl StreamDecoder {
 
     /// Choose the decoding from the start of the input, or `None` if more
     /// of it is needed first.
-    fn detect(&mut self, last: bool, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>) -> Result<Option<Kind>> {
+    fn detect(&mut self, last: bool, unknown: &mut dyn FnMut(&str) -> Option<EncodingMap>) -> Result<Option<Kind>> {
         let p = &self.pending[..];
         let utf16 = Kind::Utf16;
-        let resolve = |name: &str, pos: Position, unknown: &mut dyn FnMut(&str) -> Option<ByteMap>| {
+        let resolve = |name: &str, pos: Position, unknown: &mut dyn FnMut(&str) -> Option<EncodingMap>| {
             unknown(name).map(Kind::Map).ok_or_else(|| unknown_encoding(name, pos))
         };
         if let Some(forced) = self.forced.clone() {
@@ -410,10 +478,17 @@ impl StreamDecoder {
                 if !decided && !last {
                     return Ok(None);
                 }
-                match choose_8bit_or_unknown(p)? {
+                let kind = match choose_8bit_or_unknown(p, self.lenient_bom)? {
                     Ok(kind) => Kind::Bit8(kind),
                     Err((name, pos)) => resolve(&name, pos, unknown)?,
+                };
+                // A byte order mark ahead of a followed declaration of
+                // another encoding isn't part of the text in that encoding.
+                if p.starts_with(&[0xEF, 0xBB, 0xBF]) && !matches!(kind, Kind::Bit8(Kind8::Utf8)) {
+                    self.pending.drain(..3);
+                    self.offset += 3;
                 }
+                kind
             }
         };
         if let Kind::Utf16(_) = kind {

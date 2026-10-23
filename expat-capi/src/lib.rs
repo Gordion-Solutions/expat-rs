@@ -33,7 +33,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr
 use std::ptr;
 
 use expat_rs::{
-    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, EntityContext, ErrorKind, Event, Located, Position, Quantifier, Span,
+    AmplificationLimits, ContentKind, ContentModel, Edition, EncodingMap, EntityContext, ErrorKind, Event, Located, MapEntry, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
 use generated::*;
@@ -310,6 +310,9 @@ pub struct Shim {
     /// The input is UTF-16 (from a byte order mark or a zero byte at the
     /// start, as libexpat detects it).
     utf16: Cell<bool>,
+    /// A UTF-8 byte order mark followed by a declaration of another
+    /// encoding: libexpat counts its three bytes as three columns.
+    bom_as_bytes: Cell<bool>,
     /// Character data is delivered in pieces of at most `TEXT_PIECE` bytes:
     /// libexpat does this for input it has to convert (anything but UTF-8
     /// and US-ASCII).
@@ -385,6 +388,7 @@ impl Shim {
             xml_decl_early: Cell::new(false),
             bom: Cell::new(None),
             utf16: Cell::new(false),
+            bom_as_bytes: Cell::new(false),
             chunk_text: Cell::new(false),
             stop_error: Cell::new(XML_ERROR_ABORTED),
             ns_sep,
@@ -435,7 +439,7 @@ impl Shim {
                 // characters.
                 let mut p = StreamParser::new()
                     .with_edition(Edition::Fourth)
-                    .with_libexpat_versions()
+                    .with_libexpat_leniency()
                     .with_external_entity_refs()
                     .with_outside_whitespace()
                     .with_cdata_pieces()
@@ -613,9 +617,15 @@ impl Shim {
     }
 
     /// libexpat's column for `pos`: 0-based, and counting a byte order mark
-    /// as a column on line 1.
+    /// on line 1: as one column, or as three when a UTF-8 mark is followed
+    /// by a declaration of another encoding (libexpat reads its bytes in
+    /// that encoding).
     fn column(&self, pos: Position) -> XML_Size {
-        let bom = (pos.line == 1 && self.bom.get() == Some(true)) as u32;
+        let bom = match (pos.line, self.bom.get()) {
+            (1, Some(true)) if self.bom_as_bytes.get() => 3,
+            (1, Some(true)) => 1,
+            _ => 0,
+        };
         (pos.column.saturating_sub(1) + bom) as XML_Size
     }
 
@@ -626,28 +636,68 @@ impl Shim {
     }
 }
 
-/// Ask a C unknown-encoding handler for a byte map.
+/// Ask a C unknown-encoding handler for an encoding map.
 fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut XML_Encoding) -> c_int,
-                   data: *mut c_void, name: &str) -> Option<ByteMap> {
+                   data: *mut c_void, name: &str) -> Option<EncodingMap> {
     let name = CString::new(name).ok()?;
     let mut info = XML_Encoding { map: [-1; 256], data: ptr::null_mut(), convert: None, release: None };
     // SAFETY: the handler was registered for this purpose with `data`;
     // `name` is a valid C string and `info` a valid, writable XML_Encoding
     // for the duration of the call.
     let ok = unsafe { handler(data, name.as_ptr(), &mut info) };
-    let map = (ok == XML_STATUS_OK && acceptable_map(&info.map)).then(|| {
-        let mut map: ByteMap = Box::new([None; 256]);
-        for (byte, &entry) in info.map.iter().enumerate() {
-            // -1 marks a byte that is invalid in the encoding.
-            map[byte] = u32::try_from(entry).ok().and_then(char::from_u32);
-        }
-        map
-    });
-    if let Some(release) = info.release {
-        // SAFETY: release takes the data pointer the handler stored in info.
-        unsafe { release(info.data) };
+    // Owns the handler's data from here: released when dropped, after the
+    // map's last use (or now, if the map isn't used).
+    let converter = Converter { data: info.data, convert: info.convert, release: info.release };
+    if ok != XML_STATUS_OK || !acceptable_map(&info.map, converter.convert.is_some()) {
+        return None;
     }
-    map
+    let entries = info.map.map(|entry| match entry {
+        -4..=-2 => MapEntry::Lead((-entry) as u8),
+        _ => u32::try_from(entry).ok().and_then(char::from_u32).map_or(MapEntry::Invalid, MapEntry::Char),
+    });
+    if entries.iter().any(|e| matches!(e, MapEntry::Lead(_))) {
+        Some(EncodingMap::multi_byte(entries, move |sequence| converter.convert(sequence)))
+    } else {
+        Some(EncodingMap::single_byte(entries.map(|e| match e {
+            MapEntry::Char(c) => Some(c),
+            _ => None,
+        })))
+    }
+}
+
+/// An unknown-encoding handler's `convert` callback with its data, which
+/// its `release` callback frees when this is dropped.
+struct Converter {
+    data: *mut c_void,
+    convert: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    release: Option<unsafe extern "C" fn(*mut c_void)>,
+}
+
+// SAFETY: the converter is used only by the parser it was made for, which
+// a C program uses from one thread at a time, as libexpat requires; the
+// data pointer is the handler's, valid until `release`.
+unsafe impl Send for Converter {}
+
+impl Converter {
+    /// The character a multi-byte sequence stands for. libexpat accepts
+    /// only results up to U+FFFF from `convert`; anything else (or -1) is an
+    /// invalid sequence.
+    fn convert(&self, sequence: &[u8]) -> Option<char> {
+        let convert = self.convert?;
+        // SAFETY: `convert` gets the data the handler gave it and a pointer
+        // to a whole sequence of the length its map entry declared.
+        let c = unsafe { convert(self.data, sequence.as_ptr().cast()) };
+        u32::try_from(c).ok().filter(|&c| c <= 0xFFFF).and_then(char::from_u32)
+    }
+}
+
+impl Drop for Converter {
+    fn drop(&mut self) {
+        if let Some(release) = self.release {
+            // SAFETY: release takes the data pointer the handler stored, once.
+            unsafe { release(self.data) };
+        }
+    }
 }
 
 /// The pseudo-attributes of an XML declaration at the start of `bytes`:
@@ -852,16 +902,17 @@ const XML_SYNTAX_CHARS: &[u8] =
 
 /// Whether libexpat would accept an unknown-encoding handler's map: each
 /// of XML's syntax characters is its own byte and no other byte stands for
-/// one, and there are no multi-byte sequences (entries below -1), which
-/// would need the `convert` callback expat-capi doesn't support. Other
-/// maps are an unknown encoding. (Found by black-box tests of libexpat:
-/// remapping `$` or a control byte is accepted, `A`, `<` or LF is not.)
-fn acceptable_map(map: &[c_int; 256]) -> bool {
+/// one; multi-byte sequences (entries -2 to -4, the sequence length) only
+/// with a `convert` callback, and nothing below -4. Other maps are an
+/// unknown encoding. (Found by black-box tests of libexpat: remapping `$`
+/// or a control byte is accepted, `A`, `<` or LF is not.)
+fn acceptable_map(map: &[c_int; 256], has_convert: bool) -> bool {
     let is_syntax = |c: c_int| u8::try_from(c).is_ok_and(|c| XML_SYNTAX_CHARS.contains(&c));
     map.iter().enumerate().all(|(byte, &entry)| {
         let byte = byte as c_int;
         if entry < -1 {
-            false // a multi-byte sequence
+            // A sequence lead: needs `convert`, and may not be a syntax byte.
+            (-4..=-2).contains(&entry) && has_convert && !is_syntax(byte)
         } else if is_syntax(byte) {
             entry == byte // a syntax character must be its own byte
         } else {
@@ -1009,6 +1060,8 @@ impl Shim {
         match &l.event {
             Event::XmlDecl(d) => {
                 self.standalone.set(d.standalone == Some(true));
+                let other = d.encoding.is_some_and(|e| !e.eq_ignore_ascii_case("UTF-8"));
+                self.bom_as_bytes.set(self.bom.get() == Some(true) && !self.utf16.get() && other && self.encoding.borrow().is_none());
                 self.chunk_text.set(self.converts(d.encoding));
             }
             Event::Doctype { system_id, public_id, .. } => {
@@ -1314,9 +1367,13 @@ impl Shim {
     /// DOCTYPE handler, declarations without their handler, the whitespace
     /// between declarations and parameter-entity references always, the
     /// closing `]>` without an end handler).
+    ///
+    /// The DOCTYPE's text is kept even without a default handler, which a
+    /// handler may set from inside the DOCTYPE (minidom does, to collect the
+    /// internal subset).
     fn dtd_default(&self, l: &Located<'_>) {
         let h = &self.handlers;
-        if h.default.get().is_none() {
+        if h.default.get().is_none() && !matches!(l.event, Event::Doctype { .. }) && self.dtd_text.borrow().is_none() {
             return;
         }
         match &l.event {

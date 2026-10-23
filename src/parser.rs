@@ -89,8 +89,8 @@ pub(crate) struct State<'l> {
     /// Attribute types and defaults from `<!ATTLIST>` declarations.
     pub(crate) attlists: Arc<AttlistTable>,
     pub edition: Edition,
-    /// See `Parser::with_libexpat_versions`.
-    pub(crate) libexpat_versions: bool,
+    /// See `Parser::with_libexpat_leniency`.
+    pub(crate) libexpat_leniency: bool,
     /// Parsing an external parsed entity's content (§4.3.2) rather than a
     /// document: see `crate::external`.
     pub(crate) entity_mode: bool,
@@ -144,7 +144,7 @@ impl<'l> State<'l> {
             entities: Arc::new(EntityTable::new()),
             attlists: Arc::new(AttlistTable::default()),
             edition: Edition::default(),
-            libexpat_versions: false,
+            libexpat_leniency: false,
             entity_mode: false,
             external_refs: false,
             open_entities: Vec::new(),
@@ -240,7 +240,7 @@ impl<'l> State<'l> {
             entities: Arc::clone(&self.entities),
             attlists: Arc::clone(&self.attlists),
             edition: self.edition,
-            libexpat_versions: self.libexpat_versions,
+            libexpat_leniency: self.libexpat_leniency,
             entity_declared_wfc: self.entity_declared_wfc,
             expansion_limits: self.expansion_limits,
             amplification: self.amplification,
@@ -254,7 +254,7 @@ impl<'l> State<'l> {
         self.entities = Arc::clone(&context.entities);
         self.attlists = Arc::clone(&context.attlists);
         self.set_edition(context.edition);
-        self.libexpat_versions = context.libexpat_versions;
+        self.libexpat_leniency = context.libexpat_leniency;
         self.entity_declared_wfc = context.entity_declared_wfc;
         self.expansion_limits = context.expansion_limits;
         self.amplification = context.amplification;
@@ -621,13 +621,18 @@ impl<'a> Parser<'a> {
         self
     }
 
-    /// Accept any `version` in the XML declaration that libexpat accepts:
-    /// any run of `[A-Za-z0-9._-]`, even an empty one, rather than only
-    /// what the edition allows (`1.0`, or `1.` and digits). For drop-in
-    /// compatibility with libexpat; off by default.
-    pub fn with_libexpat_versions(mut self) -> Self {
-        self.lexer = self.lexer.with_libexpat_versions(true);
-        self.state.libexpat_versions = true;
+    /// Accept what libexpat accepts where XML 1.0 is stricter, for drop-in
+    /// compatibility with it; off by default:
+    ///
+    /// - any `version` in the XML declaration made of `[A-Za-z0-9._-]`,
+    ///   even an empty one, rather than only what the edition allows (`1.0`,
+    ///   or `1.` and digits);
+    /// - with [`crate::StreamParser`], after a UTF-8 byte order mark, an
+    ///   encoding declaration naming a non-UTF-16 encoding other than UTF-8
+    ///   is followed (XML 1.0 §4.3.3 makes it a fatal error).
+    pub fn with_libexpat_leniency(mut self) -> Self {
+        self.lexer = self.lexer.with_libexpat_leniency(true);
+        self.state.libexpat_leniency = true;
         self
     }
 

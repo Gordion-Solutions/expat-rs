@@ -321,7 +321,7 @@ fn libexpat_version_rule_is_opt_in() {
     use expat_rs::Parser;
     let parse = |doc: &str, lenient: bool| {
         let mut p = Parser::new(doc);
-        if lenient { p = p.with_libexpat_versions(); }
+        if lenient { p = p.with_libexpat_leniency(); }
         (|| { while p.next_event()?.is_some() {} Ok::<_, expat_rs::XmlError>(()) })()
     };
     for v in ["2.0", "abc", "1.0a", ""] {

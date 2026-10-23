@@ -13,6 +13,7 @@ case $target in /*) ;; *) target=$root/$target ;; esac
 # without building can stage a stale library.
 if [ "$profile" = release ]; then flag=--release; else flag="--profile $profile"; fi
 (cd "$root" && cargo build -q $flag -p expat-capi)
+target=${CARGO_TARGET_DIR:-$root/target}
 mkdir -p "$dir"
 case $(uname) in
   Darwin) cp "$target/$profile/libexpat.dylib" "$dir/libexpat.1.dylib"; ln -sf libexpat.1.dylib "$dir/libexpat.dylib" ;;

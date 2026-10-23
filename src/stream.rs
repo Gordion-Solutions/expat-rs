@@ -15,7 +15,8 @@
 //!
 //! Reparse deferral: when a chunk ends inside a construct and re-scanning
 //! it made no progress, it is not re-scanned again until the buffered
-//! input has doubled or (from 1 KiB) grown past a power of two.
+//! input has doubled, or grown by a quarter or past a power of two (and by
+//! at least 1 KiB).
 //! Otherwise a single huge construct (a long comment, say) fed in small
 //! chunks would be re-scanned from its start every time, which is
 //! quadratic: the class of libexpat's CVE-2023-52425, fixed there in a similar
@@ -25,7 +26,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::encoding::{ByteMap, StreamDecoder, UnknownEncodingHandler};
+use crate::encoding::{EncodingMap, StreamDecoder, UnknownEncodingHandler};
 use crate::entities::{AmplificationLimits, Dtd, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Event, Located, Span};
@@ -55,7 +56,8 @@ const LOOKAHEAD: usize = 16;
 ///   can't change, so long text doesn't accumulate.
 /// - Reparse deferral: once an incomplete construct has been re-scanned
 ///   without progress, it isn't re-scanned again until the buffered input
-///   has doubled or (from 1 KiB) grown past a power of two, so a huge
+///   has doubled, or grown by a quarter or past a power of two (and by at
+///   least 1 KiB), so a huge
 ///   construct fed in tiny chunks costs linear, not quadratic, time (the
 ///   class of libexpat CVE-2023-52425).
 ///   The first chunk after a pass that made progress is always tried, as
@@ -177,9 +179,10 @@ impl<'l> StreamParser<'l> {
         p
     }
 
-    /// See [`crate::Parser::with_libexpat_versions`].
-    pub fn with_libexpat_versions(mut self) -> Self {
-        self.state.libexpat_versions = true;
+    /// See [`crate::Parser::with_libexpat_leniency`].
+    pub fn with_libexpat_leniency(mut self) -> Self {
+        self.state.libexpat_leniency = true;
+        self.decoder.lenient_bom = true;
         self
     }
 
@@ -224,22 +227,29 @@ impl<'l> StreamParser<'l> {
     /// `XML_SetEncoding`). See [`StreamDecoder::with_encoding`] for the
     /// names understood; others go to the unknown-encoding handler.
     pub fn with_encoding(mut self, encoding: &str) -> Self {
+        let lenient_bom = self.decoder.lenient_bom;
         self.decoder = StreamDecoder::with_encoding(encoding);
+        self.decoder.lenient_bom = lenient_bom;
         self
     }
 
-    /// Supply a [`ByteMap`] for declared (or forced) encodings expat-rs
+    /// Supply an [`EncodingMap`] for declared (or forced) encodings expat-rs
     /// doesn't know, as libexpat's `XML_SetUnknownEncodingHandler` does;
     /// returning `None` makes the encoding an error.
-    pub fn with_unknown_encoding(mut self, handler: impl FnMut(&str) -> Option<ByteMap> + 'l) -> Self {
+    pub fn with_unknown_encoding(mut self, handler: impl FnMut(&str) -> Option<EncodingMap> + 'l) -> Self {
         self.unknown_encoding = Some(Box::new(handler));
         self
     }
 
     /// Input bytes (before decoding) up to offset `at` in `buf`, measuring
-    /// on from the last offset measured when `at` is past it.
+    /// on from the last offset measured when `at` is past it. Past the end
+    /// of `buf` (an error in input not yet decoded, such as an encoding
+    /// declaration), each further byte counts as one.
     fn input_at(&self, at: usize) -> usize {
-        let at = floor_char_boundary(&self.buf, at.min(self.buf.len()));
+        if at > self.buf.len() {
+            return self.input_at(self.buf.len()) + (at - self.buf.len());
+        }
+        let at = floor_char_boundary(&self.buf, at);
         let (done, bytes) = self.measured.get();
         let bytes = if at >= done {
             bytes + self.decoder.input_len(&self.buf[done..at])
@@ -372,14 +382,17 @@ impl<'l> StreamParser<'l> {
     }
 
     /// Reparse deferral: whether the buffer has grown enough since the last
-    /// attempt stopped at an incomplete construct to try again: doubled, or
-    /// (from 1 KiB) grown past a power of two. libexpat retries about as
-    /// often, its buffer growing in powers of two. Each attempt costs the
-    /// buffer's length and there is at most one per power of two, so the
-    /// attempts for a construct of length n cost at most about 4n in all.
+    /// attempt stopped at an incomplete construct to try again: by at least
+    /// a quarter, or past a power of two, and (unless it has doubled) by at
+    /// least 1 KiB. libexpat retries about as often when large chunks keep
+    /// arriving (pyexpat feeds 1 MiB at a time). The attempts for a
+    /// construct of length n cost at most about 9n in all: 5n for the
+    /// quarter steps, 4n for the powers of two.
     fn worth_retrying(&self) -> bool {
         let (now, then) = (self.buffered_input(), self.stalled_at);
-        now >= 2 * then || (now >= 1024 && now.next_power_of_two() > then.next_power_of_two())
+        let grown = now.saturating_sub(then);
+        now >= 2 * then
+            || (grown >= 1024 && (4 * grown >= then || now.next_power_of_two() > then.next_power_of_two()))
     }
 
     /// The input held for the next attempt, in bytes as given (as libexpat
@@ -401,7 +414,7 @@ impl<'l> StreamParser<'l> {
         let base = self.base;
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
             .with_edition(self.state.edition)
-            .with_libexpat_versions(self.state.libexpat_versions)
+            .with_libexpat_leniency(self.state.libexpat_leniency)
             .with_text_decl(self.state.entity_mode)
             .with_cdata_pieces(self.state.cdata_pieces, self.in_cdata);
         let mut out = VecDeque::new();

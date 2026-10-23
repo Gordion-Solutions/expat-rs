@@ -16,6 +16,24 @@ x86_64, Apple clang 14) built with `--with-system-expat` against expat-capi:
 | The same tests on libexpat 2.8.2 (same build) | 1088 pass, the same 36 skipped |
 | CPython's whole test suite on expat-capi | 47,976 tests pass (529 files run; the rest skipped or needing resources not enabled) |
 
+Other versions and platforms (23 Oct 2026; XML test files, expat-capi and
+libexpat side by side, same skips on both):
+
+| CPython | Platform | expat-capi | libexpat |
+| --- | --- | --- | --- |
+| 3.13 | macOS 13.7 x86_64 | 1087 pass | 1087 pass (2.8.2) |
+| 3.14 | macOS 13.7 x86_64 | 1088 pass | 1088 pass (2.8.2) |
+| 3.14 | Linux (Debian trixie, x86_64, gcc) | 1088 pass | 1088 pass (2.9.0) |
+| main (3.16.0a1+, `b1e32ff`) | macOS 13.7 x86_64 | 1179 pass | 1179 pass (2.8.2) |
+
+CPython's development branch added multi-byte encodings through libexpat's
+`convert` callback (Shift-JIS and the like), DOCTYPE round-tripping in
+minidom and a deeper content-model test; expat-capi supports all three.
+
+The ABI probe (`tests/c/abi_probe.c`) also runs clean under AddressSanitizer
+and UndefinedBehaviorSanitizer, with LeakSanitizer on Linux: no errors, no
+leaks, output identical to libexpat's.
+
 The XML test files are `test_pyexpat`, `test_xml_etree`, `test_xml_etree_c`,
 `test_sax`, `test_minidom`, `test_pulldom`, `test_xml_dom_minicompat`,
 `test_xml_dom_xmlbuilder`, `test_plistlib`, `test_xmlrpc` and
@@ -70,18 +88,16 @@ used) and fixed in expat-rs or expat-capi:
   parsing it. XML 1.0 §5.1 allows a non-validating parser to skip them, and
   both pyexpat and `xml.sax` leave them off by default. No CPython test
   depends on them.
-- Multi-byte unknown encodings (`XML_Encoding.convert`) are refused, as
-  pyexpat itself refuses them.
+- Byte indexes in documents in multi-byte unknown encodings count each
+  multi-byte sequence as one byte.
 - Suspending a parse (`XML_StopParser(parser, XML_TRUE)`, `XML_ResumeParser`)
   isn't supported; pyexpat doesn't use it.
 - `XML_GetInputContext` returns NULL (pyexpat then reports no context).
 - For about 1050 malformed documents in the W3C suite the error message or
   position differs (mostly DTD edge cases); the verdict is the same in every
   case.
-- A UTF-8 byte order mark with an encoding declaration naming another
-  encoding is a fatal error, as XML 1.0 §4.3.3 requires; libexpat accepts it.
 
 ## Not yet checked
 
-Other CPython versions (3.13, 3.15), release (non-debug) builds, Linux, and
-runs under AddressSanitizer: phase 6 of Target 2.
+CPython 3.15, release (non-debug) builds, CPython itself under
+AddressSanitizer, and other architectures (arm64).

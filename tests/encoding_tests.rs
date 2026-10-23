@@ -59,18 +59,18 @@ fn declared_8bit_encodings() {
 
 // ─── unknown encodings via byte maps; forced (protocol) encodings ─────────────
 
-use expat_rs::{ByteMap, ErrorKind, Event, StreamParser};
+use expat_rs::{EncodingMap, ErrorKind, Event, MapEntry, StreamParser};
 
 /// windows-1252 as a byte map: ASCII and Latin-1 except 0x80 = '€', and
 /// 0x81 left undefined.
-fn cp1252() -> ByteMap {
-    let mut map: ByteMap = Box::new([None; 256]);
-    for b in 0..256usize {
-        map[b] = Some(b as u8 as char);
+fn cp1252() -> EncodingMap {
+    let mut table = [None; 256];
+    for (b, entry) in table.iter_mut().enumerate() {
+        *entry = Some(b as u8 as char);
     }
-    map[0x80] = Some('€');
-    map[0x81] = None;
-    map
+    table[0x80] = Some('€');
+    table[0x81] = None;
+    EncodingMap::single_byte(table)
 }
 
 fn stream_text(bytes: &[u8], chunk: usize, parser: StreamParser<'_>) -> Result<String, expat_rs::XmlError> {
@@ -141,4 +141,54 @@ fn forced_utf16_without_bom_takes_the_byte_order_from_the_first_character() {
     }
     let space_first: Vec<u8> = " <p>€</p>".encode_utf16().flat_map(u16::to_le_bytes).collect();
     assert_eq!(stream_text(&space_first, 4, StreamParser::new().with_encoding("UTF-16")).unwrap(), "€", "whitespace first");
+}
+
+/// A made-up double-byte encoding: ASCII as itself, 0x81-0x9F lead a
+/// two-byte sequence for U+4E00 + the second byte, 0xFF second bytes are
+/// invalid.
+fn double_byte() -> EncodingMap {
+    let mut entries = [MapEntry::Invalid; 256];
+    for (b, entry) in entries.iter_mut().enumerate() {
+        *entry = match b {
+            0..=0x7F => MapEntry::Char(b as u8 as char),
+            0x81..=0x9F => MapEntry::Lead(2),
+            _ => MapEntry::Invalid,
+        };
+    }
+    EncodingMap::multi_byte(entries, |seq| (seq[1] != 0xFF).then(|| char::from_u32(0x4E00 + seq[1] as u32)).flatten())
+}
+
+#[test]
+fn multi_byte_unknown_encoding() {
+    let doc = b"<?xml version='1.0' encoding='x-db'?><p>a\x81\x41b\x82\x42</p>";
+    for chunk in [1000, 1] {
+        let got = stream_text(doc, chunk, StreamParser::new().with_unknown_encoding(|_| Some(double_byte())));
+        assert_eq!(got.unwrap(), "a\u{4E41}b\u{4E42}", "chunk {chunk}: sequences split across chunks too");
+    }
+    let bad = b"<?xml version='1.0' encoding='x-db'?><p>\x81\xFF</p>";
+    let r = stream_text(bad, 1000, StreamParser::new().with_unknown_encoding(|_| Some(double_byte())));
+    assert_eq!(r.unwrap_err().kind(), ErrorKind::InvalidToken, "converter says invalid");
+    let cut = b"<?xml version='1.0' encoding='x-db'?><p>\x81";
+    let r = stream_text(cut, 1000, StreamParser::new().with_unknown_encoding(|_| Some(double_byte())));
+    assert_eq!(r.unwrap_err().kind(), ErrorKind::PartialChar, "sequence cut off at the end");
+}
+
+#[test]
+fn utf8_bom_with_another_declared_encoding() {
+    // Latin-1 after a UTF-8 byte order mark: 0xE9 is 'é'.
+    let doc = b"\xef\xbb\xbf<?xml version='1.0' encoding='iso-8859-1'?><p>caf\xe9</p>";
+    let strict = stream_text(doc, 1000, StreamParser::new());
+    assert_eq!(strict.unwrap_err().kind(), ErrorKind::IncorrectEncoding, "XML 1.0 §4.3.3 by default");
+    for chunk in [1000, 1] {
+        let lenient = stream_text(doc, chunk, StreamParser::new().with_libexpat_leniency());
+        assert_eq!(lenient.unwrap(), "café", "libexpat follows the declaration (chunk {chunk})");
+    }
+    // An unknown name goes to the unknown-encoding handler, as in libexpat.
+    let doc = b"\xef\xbb\xbf<?xml version='1.0' encoding='windows-1252'?><p>\x80</p>";
+    let got = stream_text(doc, 1000, StreamParser::new().with_libexpat_leniency().with_unknown_encoding(|_| Some(cp1252())));
+    assert_eq!(got.unwrap(), "€");
+    // UTF-16 names stay incorrect.
+    let doc = b"\xef\xbb\xbf<?xml version='1.0' encoding='UTF-16'?><p/>";
+    let r = stream_text(doc, 1000, StreamParser::new().with_libexpat_leniency());
+    assert_eq!(r.unwrap_err().kind(), ErrorKind::IncorrectEncoding);
 }

@@ -32,7 +32,9 @@ own `xmlwf` uses (`XML_ParserCreate`, `XML_ParserCreateNS`,
 `XML_UseParserAsHandlerArg`, `XML_SetCdataSectionHandler`,
 `XML_SetDoctypeDeclHandler`, and the 2.7.2 alloc-tracker settings, which are
 accepted and have no effect). Like libexpat, it applies the Fourth Edition's
-name rules and accepts any version number made of `[A-Za-z0-9._-]`. Handlers may call back into the parser
+name rules and accepts some things XML 1.0 forbids (any version number made
+of `[A-Za-z0-9._-]`; an encoding declaration after a UTF-8 byte order mark
+naming another encoding), through expat-rs's `with_libexpat_leniency`. Handlers may call back into the parser
 (`XML_StopParser`, `XML_GetCurrentLineNumber`, setting handlers, ...) as
 libexpat allows; calling `XML_Parse` from inside a handler fails cleanly.
 See the safety notes at the top of `src/lib.rs`.
@@ -75,8 +77,8 @@ column) and the exit status were identical in all 4272 runs.
 build, such as Homebrew's) over the W3C conformance suite on libexpat and on
 expat-capi and compares exit status, messages and written output in five
 modes. On 21 Oct 2026, 2638 files: every document libexpat accepts gives
-identical output except `eduni/misc/007.xml` (below); no document libexpat
-rejects is accepted; about 1050 malformed documents get a different error
+identical output; no document libexpat
+rejects is accepted (since 23 Oct, no verdict differs at all); about 1050 malformed documents get a different error
 message or position (see below).
 
 `src/generated.rs` (constants, error strings, struct sizes) is generated
@@ -110,7 +112,6 @@ Not yet run on a physical device.
 
 ## Not yet matching libexpat
 
-- Multi-byte unknown encodings (`XML_Encoding.convert`) are refused.
 - External DTD subsets and external parameter entities aren't read: a
   parser from `XML_ExternalEntityParserCreate` with a NULL context accepts
   its input without parsing it (a non-validating parser may skip them,
@@ -122,6 +123,5 @@ Not yet run on a physical device.
   error is classified or placed differently: libexpat's grammar reports
   "syntax error" where expat-rs finds an invalid token and the reverse,
   and positions follow. Same verdict in every case.
-- Deliberately different: a UTF-8 byte order mark with an encoding
-  declaration naming another encoding is a fatal error (XML 1.0 §4.3.3;
-  the suite's `hst-lhs-007`), which libexpat accepts.
+- Byte indexes in documents in multi-byte unknown encodings count each
+  multi-byte sequence as one byte.

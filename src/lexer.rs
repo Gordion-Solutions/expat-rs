@@ -37,7 +37,7 @@ pub struct Lexer<'a> {
     /// errors, as libexpat classifies them).
     in_subset: bool,
     /// Accept any version number libexpat accepts (see
-    /// `Parser::with_libexpat_versions`).
+    /// `Parser::with_libexpat_leniency`).
     any_version: bool,
     /// A `<?xml` declaration at the start is a text declaration (§4.3.1):
     /// the version is optional. For external entities.
@@ -183,7 +183,7 @@ impl<'a> Lexer<'a> {
 
     /// Accept any version number made of `[A-Za-z0-9._-]` (even an empty
     /// one), as libexpat does, instead of the edition's rule.
-    pub fn with_libexpat_versions(mut self, on: bool) -> Self {
+    pub fn with_libexpat_leniency(mut self, on: bool) -> Self {
         self.any_version = on;
         self
     }

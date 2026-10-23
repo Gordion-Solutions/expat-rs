@@ -139,7 +139,7 @@ mod stream;
 mod token;
 
 pub use chars::Edition;
-pub use encoding::{decode, ByteMap, StreamDecoder, UnknownEncodingHandler};
+pub use encoding::{decode, EncodingMap, MapEntry, SequenceConverter, StreamDecoder, UnknownEncodingHandler};
 pub use entities::{AmplificationLimits, ExpansionLimits};
 pub use error::{ErrorKind, Position, Result, XmlError};
 pub use external::EntityContext;
