@@ -8,6 +8,8 @@ built on the older spec, such as libexpat. Aims for the same conformance
 as [libexpat](https://github.com/libexpat/libexpat) without C's
 memory-safety bugs.
 
+Project page: <https://gordionsolutions.co.uk/software/#expat-rs>
+
 > **Status:** early development. Well-formedness checking, DOCTYPE /
 > internal-subset handling, entity expansion with billion-laughs /
 > quadratic-blowup defences, opt-in external entity loading, UTF-8 /
