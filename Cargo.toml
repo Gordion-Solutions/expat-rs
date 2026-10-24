@@ -6,6 +6,7 @@ rust-version = "1.94"
 description = "Memory-safe XML 1.0 parser: streaming, namespaces, hardened against hostile input; aims for libexpat-level conformance"
 license = "MIT"
 repository = "https://github.com/Gordion-Solutions/expat-rs"
+homepage = "https://gordionsolutions.co.uk/software/#expat-rs"
 documentation = "https://docs.rs/expat-rs"
 readme = "README.md"
 keywords = ["xml", "parser", "expat", "memory-safety"]
