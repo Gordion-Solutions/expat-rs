@@ -29,6 +29,12 @@ pub enum Token<'a> {
         /// The rest of the declaration as written (external ID and
         /// internal subset), trimmed.
         body: &'a str,
+        /// System identifier of the external subset, if any.
+        system_id: Option<&'a str>,
+        /// Public identifier of the external subset, if any.
+        public_id: Option<&'a str>,
+        /// Whether there is an internal subset (`[...]`).
+        has_internal_subset: bool,
     },
 
     /// Element start tag: `<name attr="value" ...>`. Per §3.1 [Production 40].

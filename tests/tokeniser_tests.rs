@@ -121,13 +121,13 @@ fn xml_declaration_with_encoding_and_standalone() {
 #[test]
 fn doctype_simple() {
     let ts = tokens("<!DOCTYPE html>");
-    assert!(matches!(&ts[0], Token::Doctype { name, body } if *name == "html" && body.is_empty()));
+    assert!(matches!(&ts[0], Token::Doctype { name, body, .. } if *name == "html" && body.is_empty()));
 }
 
 #[test]
 fn doctype_with_internal_subset() {
     let ts = tokens("<!DOCTYPE root [ <!ELEMENT root (#PCDATA)> ]>");
-    if let Token::Doctype { name, body } = &ts[0] {
+    if let Token::Doctype { name, body, .. } = &ts[0] {
         assert_eq!(*name, "root");
         assert!(body.contains("<!ELEMENT root"));
     } else { panic!("not a Doctype"); }

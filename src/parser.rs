@@ -20,8 +20,8 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::entities::{AttDecl, AttlistTable, Dtd, DtdDecl, EntityTable, ExpansionLimits};
-use crate::error::{Position, Result, XmlError};
+use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
 
 /// Events produced while handling a token, each with its span.
@@ -100,6 +100,10 @@ pub(crate) struct State<'l> {
     /// Namespace processing, if enabled.
     pub namespaces: Option<Namespaces>,
     pub expansion_limits: ExpansionLimits,
+    pub amplification: AmplificationLimits,
+    /// Bytes of the document read so far (libexpat's "direct" bytes), for
+    /// the amplification check.
+    pub direct_bytes: u64,
     /// Cumulative bytes of expanded entity content seen so far in this
     /// document. The per-reference budget alone doesn't catch the
     /// quadratic-blowup pattern (linear-size payload with N references to a
@@ -124,6 +128,8 @@ impl<'l> State<'l> {
             loader: None,
             namespaces: None,
             expansion_limits: ExpansionLimits::default(),
+            amplification: AmplificationLimits::default(),
+            direct_bytes: 0,
             expanded_bytes_total: 0,
         }
     }
@@ -139,8 +145,16 @@ impl<'l> State<'l> {
         self.namespaces = Some(Namespaces::new(self.edition));
     }
 
-    fn not_wf(&self, reason: impl Into<String>) -> XmlError {
-        XmlError::NotWellFormed { pos: self.last_pos, reason: reason.into() }
+    fn not_wf(&self, kind: ErrorKind, reason: impl Into<String>) -> XmlError {
+        XmlError::NotWellFormed { pos: self.last_pos, kind, reason: reason.into() }
+    }
+
+    /// Content where only whitespace, comments and PIs may appear: junk
+    /// after the root element, an invalid token before it (as libexpat
+    /// classifies them).
+    fn outside_root(&self, reason: &str) -> XmlError {
+        let kind = if self.phase == Phase::Epilog { ErrorKind::JunkAfterDocElement } else { ErrorKind::InvalidToken };
+        self.not_wf(kind, reason)
     }
 
     fn expander(&mut self) -> Expander<'_, 'l> {
@@ -169,8 +183,19 @@ impl<'l> State<'l> {
     /// pattern (many references to one benign-looking entity); this does.
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.expanded_bytes_total = self.expanded_bytes_total.saturating_add(bytes);
+        // libexpat's billion-laughs protection (see AmplificationLimits).
+        let direct = self.direct_bytes.max(1);
+        let total = direct.saturating_add(self.expanded_bytes_total as u64);
+        if total >= self.amplification.activation_threshold
+            && total as f64 / direct as f64 > self.amplification.maximum_factor as f64
+        {
+            return Err(self.not_wf(ErrorKind::AmplificationLimitBreach, format!(
+                "input amplification factor {:.2} exceeds the maximum of {} \
+                 (from DTD and entities)",
+                total as f64 / direct as f64, self.amplification.maximum_factor)));
+        }
         if self.expanded_bytes_total > self.expansion_limits.max_expanded_bytes {
-            return Err(self.not_wf(format!(
+            return Err(self.not_wf(ErrorKind::AmplificationLimitBreach, format!(
                 "cumulative entity expansion exceeded {} bytes — \
                  possible quadratic-blowup payload",
                 self.expansion_limits.max_expanded_bytes)));
@@ -182,7 +207,7 @@ impl<'l> State<'l> {
     /// references checked and budgeted, declared defaults added.
     fn attributes<'t>(&mut self, element: &str, attrs: &[crate::token::Attr<'t>]) -> Result<Vec<Attribute<'t>>> {
         let mut x = self.expander();
-        let out = x.attributes(element, attrs)?;
+        let out = x.attributes(element, attrs, false)?;
         let used = x.expanded;
         self.charge(used)?;
         Ok(out)
@@ -217,13 +242,32 @@ impl<'l> State<'l> {
                         system_id: system_id.map(Cow::Owned),
                     }, out)?;
                 }
+                DtdDecl::Element { name, model } => {
+                    self.emit(Event::ElementDecl { name: Cow::Owned(name), model }, out)?;
+                }
                 _ if after_unread_pe => {}
                 DtdDecl::Entity { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
-                    return Err(self.not_wf(format!("entity name {name:?} contains a colon (Namespaces §7)")));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon (Namespaces §7)")));
                 }
-                DtdDecl::Entity { name, parameter: false, def } => self.entities.declare_def(name, def),
-                DtdDecl::Entity { parameter: true, .. } => {}
-                DtdDecl::AttDef { element, name, cdata, default, pos } => {
+                DtdDecl::Entity { name, parameter, def } => {
+                    let event = match &def {
+                        EntityDef::Internal(text) => Event::EntityDecl {
+                            name: Cow::Owned(name.clone()), parameter, value: Some(Cow::Owned(text.clone())),
+                            system_id: None, public_id: None, notation: None,
+                        },
+                        EntityDef::External { system_id, public_id, notation, .. } => Event::EntityDecl {
+                            name: Cow::Owned(name.clone()), parameter, value: None,
+                            system_id: Some(Cow::Owned(system_id.clone())),
+                            public_id: public_id.clone().map(Cow::Owned),
+                            notation: notation.clone().map(Cow::Owned),
+                        },
+                    };
+                    if !parameter {
+                        self.entities.declare_def(name, def);
+                    }
+                    self.emit(event, out)?;
+                }
+                DtdDecl::AttDef { element, name, att_type, required, cdata, default, pos } => {
                     // Defaults are normalised, and their references checked,
                     // at the point of declaration (Entity Declared requires
                     // declaration before use here).
@@ -235,6 +279,13 @@ impl<'l> State<'l> {
                         }
                         None => None,
                     };
+                    self.emit(Event::AttlistDecl {
+                        element: Cow::Owned(element.clone()),
+                        attribute: Cow::Owned(name.clone()),
+                        att_type: Cow::Owned(att_type),
+                        default: default.clone().map(Cow::Owned),
+                        required,
+                    }, out)?;
                     self.attlists.declare(element, AttDecl { name, cdata, default });
                 }
             }
@@ -246,17 +297,17 @@ impl<'l> State<'l> {
     /// End of input: everything opened must have closed.
     pub fn finish(&self) -> Result<()> {
         if let Some(open) = self.stack.top() {
-            return Err(self.not_wf(format!("unclosed element {open:?}")));
+            return Err(self.not_wf(ErrorKind::NoElements, format!("unclosed element {open:?}")));
         }
         if self.phase == Phase::Prolog {
-            return Err(self.not_wf("no root element"));
+            return Err(self.not_wf(ErrorKind::NoElements, "no root element"));
         }
         Ok(())
     }
 
     fn start_element_allowed(&self) -> Result<()> {
         if self.phase == Phase::Epilog {
-            return Err(self.not_wf("second root element not allowed"));
+            return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "second root element not allowed"));
         }
         Ok(())
     }
@@ -274,24 +325,30 @@ impl<'l> State<'l> {
         match tok {
             Token::XmlDecl(d) => {
                 if self.saw_xmldecl {
-                    return Err(self.not_wf("duplicate XML declaration"));
+                    return Err(self.not_wf(ErrorKind::MisplacedXmlPi, "duplicate XML declaration"));
                 }
                 if self.phase != Phase::Prolog || self.saw_doctype || !self.stack.is_empty() {
-                    return Err(self.not_wf("XML declaration must be the first thing in the document"));
+                    return Err(self.not_wf(ErrorKind::MisplacedXmlPi, "XML declaration must be the first thing in the document"));
                 }
                 self.saw_xmldecl = true;
                 self.standalone = d.standalone;
                 self.emit(Event::XmlDecl(d), out)
             }
-            Token::Doctype { name, body } => {
+            Token::Doctype { name, body, system_id, public_id, has_internal_subset } => {
                 if self.saw_doctype {
-                    return Err(self.not_wf("duplicate DOCTYPE declaration"));
+                    return Err(self.not_wf(ErrorKind::Syntax, "duplicate DOCTYPE declaration"));
                 }
                 if self.phase != Phase::Prolog {
-                    return Err(self.not_wf("DOCTYPE must appear before the root element"));
+                    return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "DOCTYPE must appear before the root element"));
                 }
                 self.saw_doctype = true;
-                self.emit(Event::Doctype { name, body }, out)?;
+                self.emit(Event::Doctype {
+                    name,
+                    body,
+                    system_id: system_id.map(Cow::Borrowed),
+                    public_id: public_id.map(Cow::Borrowed),
+                    has_internal_subset,
+                }, out)?;
                 self.process_dtd(dtd, out)
             }
             Token::StartTag { name, attributes } => {
@@ -312,9 +369,9 @@ impl<'l> State<'l> {
             }
             Token::EndTag(name) => {
                 match self.stack.top() {
-                    None => return Err(self.not_wf(format!("unexpected end tag </{name}> with no matching start"))),
+                    None => return Err(self.outside_root(&format!("unexpected end tag </{name}> with no matching start"))),
                     Some(top) if top != name => {
-                        return Err(self.not_wf(format!("end tag </{name}> does not match start tag <{top}>")));
+                        return Err(self.not_wf(ErrorKind::TagMismatch, format!("end tag </{name}> does not match start tag <{top}>")));
                     }
                     Some(_) => {}
                 }
@@ -327,7 +384,7 @@ impl<'l> State<'l> {
                     if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
                         // Report the first character that isn't whitespace.
                         self.last_pos = self.last_pos.advance(&s[..i]);
-                        return Err(self.not_wf("non-whitespace text outside the root element"));
+                        return Err(self.outside_root("non-whitespace text outside the root element"));
                     }
                     // Whitespace in the prolog/epilog is silently absorbed.
                     return Ok(());
@@ -336,7 +393,7 @@ impl<'l> State<'l> {
             }
             Token::CData(s) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("CDATA section outside the root element"));
+                    return Err(self.outside_root("CDATA section outside the root element"));
                 }
                 self.emit(Event::CData(normalize_newlines(s)), out)
             }
@@ -349,7 +406,7 @@ impl<'l> State<'l> {
             // quadratic-blowup, and its events delivered in place.
             Token::EntityRef(name) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("entity reference outside the root element"));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, "entity reference outside the root element"));
                 }
                 if let Some(text) = crate::entities::builtin_entity(name) {
                     return self.emit(Event::Text(Cow::Borrowed(text)), out);
@@ -362,7 +419,7 @@ impl<'l> State<'l> {
             }
             Token::CharRef(c) => {
                 if self.stack.is_empty() {
-                    return Err(self.not_wf("character reference outside the root element"));
+                    return Err(self.not_wf(ErrorKind::InvalidToken, "character reference outside the root element"));
                 }
                 self.emit(Event::Text(Cow::Owned(c.to_string())), out)
             }
@@ -434,6 +491,13 @@ impl<'a> Parser<'a> {
         self
     }
 
+    /// Configure libexpat-style amplification limits (on by default, with
+    /// libexpat's defaults); they apply alongside the expansion limits.
+    pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
+        self.state.amplification = limits;
+        self
+    }
+
     /// Produce the next event, or `Ok(None)` at end of well-formed input.
     pub fn next_event(&mut self) -> Result<Option<Event<'a>>> {
         Ok(self.next_located()?.map(|l| l.event))
@@ -455,6 +519,7 @@ impl<'a> Parser<'a> {
             match self.lexer.next_token()? {
                 Some(tok) => {
                     self.state.span = Span { start, end: self.lexer.position() };
+                    self.state.direct_bytes = self.lexer.position().byte_offset as u64;
                     let dtd = self.lexer.take_dtd();
                     self.state.handle(tok, dtd, &mut self.out)?;
                 }
@@ -470,20 +535,26 @@ impl<'a> Parser<'a> {
 
 /// Per §3.1 (Unique Att Spec): no element may have two attributes with the
 /// same name. Hash-based above a handful of attributes, so an element with
-/// very many attributes costs linear, not quadratic, time.
-pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], pos: Position) -> Result<()> {
-    let duplicate = |name: &str| XmlError::NotWellFormed { pos, reason: format!("duplicate attribute {name:?}") };
+/// very many attributes costs linear, not quadratic, time. A duplicate is
+/// reported at the second attribute's name (as libexpat does), or at
+/// `fixed_pos` when given.
+pub(crate) fn check_unique_attrs(attrs: &[crate::token::Attr<'_>], fixed_pos: Option<Position>) -> Result<()> {
+    let duplicate = |a: &crate::token::Attr<'_>| XmlError::NotWellFormed {
+        pos: fixed_pos.unwrap_or(a.pos),
+        kind: ErrorKind::DuplicateAttribute,
+        reason: format!("duplicate attribute {:?}", a.name),
+    };
     if attrs.len() <= 8 {
         for (i, a) in attrs.iter().enumerate() {
             if attrs[..i].iter().any(|b| b.name == a.name) {
-                return Err(duplicate(a.name));
+                return Err(duplicate(a));
             }
         }
     } else {
         let mut seen = std::collections::HashSet::with_capacity(attrs.len());
         for a in attrs {
             if !seen.insert(a.name) {
-                return Err(duplicate(a.name));
+                return Err(duplicate(a));
             }
         }
     }

@@ -58,6 +58,8 @@ pub enum XmlError {
     NotWellFormed {
         /// Where the problem was found.
         pos: Position,
+        /// The class of problem; see [`ErrorKind`].
+        kind: ErrorKind,
         /// What is wrong, in words.
         reason: String,
     },
@@ -85,6 +87,8 @@ pub enum XmlError {
     Encoding {
         /// Always the start of the input.
         pos: Position,
+        /// The class of problem; see [`ErrorKind`].
+        kind: ErrorKind,
         /// What is wrong, in words.
         reason: String,
     },
@@ -99,7 +103,106 @@ pub enum XmlError {
     },
 }
 
+/// The class of an error, with one variant per distinct error libexpat
+/// reports (its `XML_Error` codes), so that callers that need libexpat's
+/// codes can map one-to-one. Each variant names the libexpat code it
+/// corresponds to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ErrorKind {
+    /// Malformed markup in the DTD (`XML_ERROR_SYNTAX`).
+    Syntax,
+    /// The input ended with no root element, an unclosed element or an
+    /// unclosed internal subset (`XML_ERROR_NO_ELEMENTS`).
+    NoElements,
+    /// Malformed markup or a character not allowed where it appears
+    /// (`XML_ERROR_INVALID_TOKEN`).
+    InvalidToken,
+    /// The input ended inside a construct (`XML_ERROR_UNCLOSED_TOKEN`).
+    UnclosedToken,
+    /// The input ended inside a multi-byte character
+    /// (`XML_ERROR_PARTIAL_CHAR`).
+    PartialChar,
+    /// An end tag doesn't match its start tag (`XML_ERROR_TAG_MISMATCH`).
+    TagMismatch,
+    /// An attribute is given twice (`XML_ERROR_DUPLICATE_ATTRIBUTE`).
+    DuplicateAttribute,
+    /// Content after the root element (`XML_ERROR_JUNK_AFTER_DOC_ELEMENT`).
+    JunkAfterDocElement,
+    /// A parameter-entity reference where none is allowed
+    /// (`XML_ERROR_PARAM_ENTITY_REF`).
+    ParamEntityRef,
+    /// A reference to an undeclared entity (`XML_ERROR_UNDEFINED_ENTITY`).
+    UndefinedEntity,
+    /// An entity refers to itself (`XML_ERROR_RECURSIVE_ENTITY_REF`).
+    RecursiveEntityRef,
+    /// An entity's markup isn't balanced within it
+    /// (`XML_ERROR_ASYNC_ENTITY`).
+    AsyncEntity,
+    /// A character reference to a character that isn't allowed
+    /// (`XML_ERROR_BAD_CHAR_REF`).
+    BadCharRef,
+    /// A reference to an unparsed entity (`XML_ERROR_BINARY_ENTITY_REF`).
+    BinaryEntityRef,
+    /// A reference to an external entity in an attribute value
+    /// (`XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF`).
+    AttributeExternalEntityRef,
+    /// An XML or text declaration away from the start
+    /// (`XML_ERROR_MISPLACED_XML_PI`).
+    MisplacedXmlPi,
+    /// The declared encoding isn't supported (`XML_ERROR_UNKNOWN_ENCODING`).
+    UnknownEncoding,
+    /// The bytes contradict the declared encoding
+    /// (`XML_ERROR_INCORRECT_ENCODING`).
+    IncorrectEncoding,
+    /// The input ended inside a CDATA section
+    /// (`XML_ERROR_UNCLOSED_CDATA_SECTION`).
+    UnclosedCdataSection,
+    /// An external entity couldn't be loaded
+    /// (`XML_ERROR_EXTERNAL_ENTITY_HANDLING`).
+    ExternalEntityHandling,
+    /// A malformed XML declaration (`XML_ERROR_XML_DECL`).
+    XmlDecl,
+    /// A malformed text declaration (`XML_ERROR_TEXT_DECL`).
+    TextDecl,
+    /// A character not allowed in a public identifier
+    /// (`XML_ERROR_PUBLICID`).
+    PublicId,
+    /// Entity expansion exceeded the configured limits
+    /// (`XML_ERROR_AMPLIFICATION_LIMIT_BREACH`).
+    AmplificationLimitBreach,
+    /// A namespace prefix that isn't declared (`XML_ERROR_UNBOUND_PREFIX`).
+    UnboundPrefix,
+    /// `xmlns:p=""`, not allowed in Namespaces 1.0
+    /// (`XML_ERROR_UNDECLARING_PREFIX`).
+    UndeclaringPrefix,
+    /// The `xml` prefix bound to the wrong namespace
+    /// (`XML_ERROR_RESERVED_PREFIX_XML`).
+    ReservedPrefixXml,
+    /// The `xmlns` prefix declared (`XML_ERROR_RESERVED_PREFIX_XMLNS`).
+    ReservedPrefixXmlns,
+    /// A reserved namespace name bound to the wrong prefix
+    /// (`XML_ERROR_RESERVED_NAMESPACE_URI`).
+    ReservedNamespaceUri,
+    /// The parser was used after it finished (`XML_ERROR_FINISHED`).
+    Finished,
+    /// An API call made with arguments it can't accept
+    /// (`XML_ERROR_INVALID_ARGUMENT`).
+    InvalidArgument,
+}
+
 impl XmlError {
+    /// The class of the error.
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            XmlError::NotWellFormed { kind, .. } | XmlError::Encoding { kind, .. } => *kind,
+            XmlError::UnexpectedEof { context: "CDATA", .. } => ErrorKind::UnclosedCdataSection,
+            XmlError::UnexpectedEof { context: "DOCTYPE internal subset", .. } => ErrorKind::NoElements,
+            XmlError::UnexpectedEof { .. } => ErrorKind::UnclosedToken,
+            XmlError::InvalidChar { .. } => ErrorKind::InvalidToken,
+            XmlError::ExternalEntity { .. } => ErrorKind::ExternalEntityHandling,
+        }
+    }
+
     /// Where the error occurred.
     pub fn position(&self) -> Position {
         match self {

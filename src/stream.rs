@@ -23,9 +23,9 @@
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
-use crate::encoding::StreamDecoder;
-use crate::entities::{Dtd, ExpansionLimits};
-use crate::error::{Position, Result, XmlError};
+use crate::encoding::{ByteMap, StreamDecoder, UnknownEncodingHandler};
+use crate::entities::{AmplificationLimits, Dtd, ExpansionLimits};
+use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{Event, Located, Span};
 use crate::lexer::Lexer;
 use crate::parser::State;
@@ -71,9 +71,13 @@ pub struct StreamParser<'l> {
     input: Option<Input>,
     /// A parser that has failed stays failed.
     failed: Option<XmlError>,
+    /// Supplies byte maps for encodings expat-rs doesn't know.
+    unknown_encoding: Option<UnknownEncodingHandler<'l>>,
     /// Size of `buf` when the last pass stopped at an incomplete construct
     /// (0 if it didn't). See the module docs on reparse deferral.
     stalled_at: usize,
+    /// Whether reparse deferral is on (the default).
+    deferral: bool,
     finished: bool,
 }
 
@@ -100,7 +104,9 @@ impl<'l> StreamParser<'l> {
             at_start: true,
             input: None,
             failed: None,
+            unknown_encoding: None,
             stalled_at: 0,
+            deferral: true,
             finished: false,
         }
     }
@@ -126,6 +132,55 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// Turn reparse deferral on (the default) or off. See
+    /// [`set_reparse_deferral`](Self::set_reparse_deferral).
+    pub fn with_reparse_deferral(mut self, enabled: bool) -> Self {
+        self.deferral = enabled;
+        self
+    }
+
+    /// Turn reparse deferral on or off, including between chunks. With it
+    /// off, every chunk re-scans an incomplete construct from its start, so
+    /// events fire as early as possible but a huge construct fed in tiny
+    /// chunks costs quadratic time. Mirrors libexpat's
+    /// `XML_SetReparseDeferralEnabled`.
+    pub fn set_reparse_deferral(&mut self, enabled: bool) {
+        self.deferral = enabled;
+    }
+
+    /// Whether reparse deferral is on.
+    pub fn reparse_deferral(&self) -> bool {
+        self.deferral
+    }
+
+    /// Decode the input as `encoding`, whatever it declares (libexpat's
+    /// protocol encoding, as set by `XML_ParserCreate(encoding)` or
+    /// `XML_SetEncoding`). See [`StreamDecoder::with_encoding`] for the
+    /// names understood; others go to the unknown-encoding handler.
+    pub fn with_encoding(mut self, encoding: &str) -> Self {
+        self.decoder = StreamDecoder::with_encoding(encoding);
+        self
+    }
+
+    /// Supply a [`ByteMap`] for declared (or forced) encodings expat-rs
+    /// doesn't know, as libexpat's `XML_SetUnknownEncodingHandler` does;
+    /// returning `None` makes the encoding an error.
+    pub fn with_unknown_encoding(mut self, handler: impl FnMut(&str) -> Option<ByteMap> + 'l) -> Self {
+        self.unknown_encoding = Some(Box::new(handler));
+        self
+    }
+
+    /// See [`crate::Parser::with_amplification_limits`].
+    pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
+        self.state.amplification = limits;
+        self
+    }
+
+    /// Change the amplification limits; meant for before parsing starts.
+    pub fn set_amplification_limits(&mut self, limits: AmplificationLimits) {
+        self.state.amplification = limits;
+    }
+
     /// See [`crate::Parser::with_expansion_limits`].
     pub fn with_expansion_limits(mut self, limits: ExpansionLimits) -> Self {
         self.state.expansion_limits = limits;
@@ -142,7 +197,8 @@ impl<'l> StreamParser<'l> {
     /// source text. Positions are relative to the whole document.
     pub fn feed_located(&mut self, bytes: &[u8], handler: impl FnMut(Located<'_>)) -> Result<()> {
         self.guarded(Input::Bytes, |p| {
-            p.decoder.decode(bytes, false, &mut p.buf)?;
+            let unknown = &mut p.unknown_encoding;
+            p.decoder.decode_with(bytes, false, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
             p.run(false, handler)
         })
     }
@@ -173,7 +229,8 @@ impl<'l> StreamParser<'l> {
         let input = self.input.unwrap_or(Input::Text);
         self.guarded(input, |p| {
             if input == Input::Bytes {
-                p.decoder.decode(&[], true, &mut p.buf)?;
+                let unknown = &mut p.unknown_encoding;
+                p.decoder.decode_with(&[], true, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
             }
             p.run(true, handler)?;
             p.finished = true;
@@ -186,11 +243,12 @@ impl<'l> StreamParser<'l> {
             return Err(e.clone());
         }
         if self.finished {
-            return Err(XmlError::NotWellFormed { pos: self.base, reason: "input after finish()".into() });
+            return Err(XmlError::NotWellFormed { pos: self.base, kind: ErrorKind::Finished, reason: "input after finish()".into() });
         }
         if *self.input.get_or_insert(input) != input {
             return Err(XmlError::NotWellFormed {
                 pos: self.base,
+                kind: ErrorKind::InvalidArgument,
                 reason: "feed() and feed_str() can't be mixed in one document".into(),
             });
         }
@@ -200,7 +258,7 @@ impl<'l> StreamParser<'l> {
     /// Tokenise and handle as much of `buf` as is complete, then drop the
     /// consumed text.
     fn run(&mut self, last: bool, mut handler: impl FnMut(Located<'_>)) -> Result<()> {
-        if !last && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
+        if !last && self.deferral && self.stalled_at > 0 && self.buf.len() < 2 * self.stalled_at {
             return Ok(()); // reparse deferral: wait for more input
         }
         let base = self.base;
@@ -229,6 +287,7 @@ impl<'l> StreamParser<'l> {
                     }
                     let dtd: Dtd = lexer.take_dtd();
                     self.state.span = Span { start, end };
+                    self.state.direct_bytes = end.rebase(base).byte_offset as u64;
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
                     for (event, span) in out.drain(..) {
                         let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");

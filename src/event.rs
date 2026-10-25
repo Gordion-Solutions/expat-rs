@@ -33,6 +33,12 @@ pub enum Event<'a> {
         name: &'a str,
         /// The rest of the declaration as written, trimmed.
         body: &'a str,
+        /// System identifier of the external subset, if any.
+        system_id: Option<Cow<'a, str>>,
+        /// Public identifier of the external subset, if any.
+        public_id: Option<Cow<'a, str>>,
+        /// Whether the DOCTYPE has an internal subset (`[...]`).
+        has_internal_subset: bool,
     },
 
     /// Element start (or empty-element). Per §3.
@@ -75,6 +81,52 @@ pub enum Event<'a> {
     /// end-doctype handler.
     EndDoctype,
 
+    /// An element type declaration from the internal subset (§3.2), between
+    /// `Doctype` and `EndDoctype`. Mirrors libexpat's element-declaration
+    /// handler.
+    ElementDecl {
+        /// The element type declared.
+        name: Cow<'a, str>,
+        /// Its content model.
+        model: ContentModel,
+    },
+
+    /// One attribute definition from an attribute-list declaration in the
+    /// internal subset (§3.3), between `Doctype` and `EndDoctype`. Mirrors
+    /// libexpat's attribute-list handler, which is called once per
+    /// attribute.
+    AttlistDecl {
+        /// The element type the attribute belongs to.
+        element: Cow<'a, str>,
+        /// The attribute's name.
+        attribute: Cow<'a, str>,
+        /// The declared type as libexpat spells it: `CDATA`, `ID`, …,
+        /// `NMTOKENS`, an enumeration `(a|b)` or `NOTATION(x|y)`.
+        att_type: Cow<'a, str>,
+        /// The default value (plain or #FIXED, normalised), if any.
+        default: Option<Cow<'a, str>>,
+        /// `true` for #REQUIRED and #FIXED.
+        required: bool,
+    },
+
+    /// A general or parameter entity declaration from the internal subset
+    /// (§4.2), between `Doctype` and `EndDoctype`. Mirrors libexpat's
+    /// entity-declaration handler.
+    EntityDecl {
+        /// The entity's name.
+        name: Cow<'a, str>,
+        /// A parameter entity (`<!ENTITY % ...>`).
+        parameter: bool,
+        /// Replacement text of an internal entity; `None` for external.
+        value: Option<Cow<'a, str>>,
+        /// System identifier of an external entity.
+        system_id: Option<Cow<'a, str>>,
+        /// Public identifier of an external entity, if given.
+        public_id: Option<Cow<'a, str>>,
+        /// Notation name of an unparsed entity (`NDATA`).
+        notation: Option<Cow<'a, str>>,
+    },
+
     /// A notation declaration from the DTD (§4.7), between `Doctype` and
     /// `EndDoctype`. Mirrors libexpat's `XML_SetNotationDeclHandler`.
     NotationDecl {
@@ -111,6 +163,75 @@ pub enum Event<'a> {
     /// where that is only a validity error. Mirrors libexpat's
     /// `XML_SetSkippedEntityHandler`.
     SkippedEntity(Cow<'a, str>),
+}
+
+/// A content model from an element declaration (§3.2): a tree stored as a
+/// flat list of nodes that refer to their children by index, like
+/// libexpat's `XML_Content` array. Nothing about it is recursive, so a
+/// hostile, deeply nested declaration can't exhaust the stack when the
+/// model is built, cloned, compared, printed or dropped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContentModel {
+    /// All nodes of the tree.
+    pub nodes: Vec<ContentNode>,
+    /// Index of the root node in `nodes`.
+    pub root: usize,
+}
+
+/// One node of a [`ContentModel`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContentNode {
+    /// What this node is.
+    pub kind: ContentKind,
+    /// Its occurrence indicator.
+    pub quant: Quantifier,
+    /// The element name, for [`ContentKind::Name`] nodes.
+    pub name: Option<String>,
+    /// Indices (in [`ContentModel::nodes`]) of the children of a choice,
+    /// sequence or mixed group, in order (names, for mixed).
+    pub children: Vec<usize>,
+}
+
+impl ContentModel {
+    /// The root node.
+    pub fn root(&self) -> &ContentNode {
+        &self.nodes[self.root]
+    }
+
+    /// The children of `node`, in order.
+    pub fn children<'m>(&'m self, node: &'m ContentNode) -> impl Iterator<Item = &'m ContentNode> {
+        node.children.iter().map(|&i| &self.nodes[i])
+    }
+}
+
+/// The kind of a [`ContentModel`] node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentKind {
+    /// `EMPTY`.
+    Empty,
+    /// `ANY`.
+    Any,
+    /// `(#PCDATA)` or `(#PCDATA|a|b)*`.
+    Mixed,
+    /// An element name.
+    Name,
+    /// `(a|b)`.
+    Choice,
+    /// `(a,b)`, and a group of one, `(a)`.
+    Seq,
+}
+
+/// An occurrence indicator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quantifier {
+    /// Exactly once.
+    None,
+    /// `?`
+    Opt,
+    /// `*`
+    Rep,
+    /// `+`
+    Plus,
 }
 
 /// Where an event came from in the (decoded) input: from `start` up to,

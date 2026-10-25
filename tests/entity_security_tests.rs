@@ -240,3 +240,53 @@ fn numeric_ref_with_plus_sign_is_rejected() {
     let mut p = Parser::new(payload);
     assert!(drain(&mut p).is_err(), "&#+65; is not a legal CharRef and must be rejected");
 }
+
+// -- libexpat-style amplification limits (CPython's ExpansionProtectionTest)
+
+/// CPython's exponential_expansion_payload(nrows, ncols).
+fn expansion_payload(nrows: usize, ncols: usize) -> String {
+    let body: Vec<String> = (0..nrows)
+        .map(|i| format!("    <!ENTITY row{} \"{}\">", i + 1, format!("&row{i};").repeat(ncols)))
+        .collect();
+    format!("<?xml version=\"1.0\"?>\n<!DOCTYPE doc [\n    <!ENTITY row0 \".\">\n    <!ELEMENT doc (#PCDATA)>\n{}\n]>\n<doc>&row{nrows};</doc>",
+            body.join("\n"))
+}
+
+fn parse_with(payload: &str, threshold: u64, factor: f32) -> Result<(), XmlError> {
+    let mut p = Parser::new(payload).with_amplification_limits(expat_rs::AmplificationLimits {
+        activation_threshold: threshold,
+        maximum_factor: factor,
+    });
+    drain(&mut p)
+}
+
+fn is_amplification_breach(r: &Result<(), XmlError>) -> bool {
+    matches!(r, Err(e) if e.kind() == expat_rs::ErrorKind::AmplificationLimitBreach)
+}
+
+#[test]
+fn amplification_threshold_reached() {
+    assert!(is_amplification_breach(&parse_with(&expansion_payload(4, 10), 3, 1.0)));
+}
+
+#[test]
+fn amplification_threshold_not_reached() {
+    parse_with(&expansion_payload(4, 10), 100_000, 1.0).expect("total stays under the threshold");
+}
+
+#[test]
+fn amplification_factor_exceeded() {
+    assert!(is_amplification_breach(&parse_with(&expansion_payload(2, 1), 0, 1.0)));
+}
+
+#[test]
+fn amplification_factor_not_exceeded() {
+    parse_with(&expansion_payload(2, 1), 0, 1e4).expect("factor stays under 10,000");
+}
+
+#[test]
+fn amplification_defaults_leave_normal_documents_alone() {
+    let payload = expansion_payload(3, 10);
+    let mut p = Parser::new(&payload);
+    drain(&mut p).expect("1,000 small expansions under default limits");
+}
