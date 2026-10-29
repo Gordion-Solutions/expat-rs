@@ -54,6 +54,10 @@ pub(crate) struct Expander<'e, 'l> {
     stack: Vec<String>,
     /// Events produced by expanding content entities, in document order.
     pub events: Vec<Event<'static>>,
+    /// While normalising an attribute value: which of its references
+    /// (0 = the first `&`) is being processed, and whether it is a
+    /// character reference, so an error can be placed.
+    failed_ref: Option<(usize, bool)>,
 }
 
 impl<'e, 'l> Expander<'e, 'l> {
@@ -68,7 +72,7 @@ impl<'e, 'l> Expander<'e, 'l> {
     ) -> Self {
         Self {
             table, attlists, limits, edition, entity_declared_wfc, loader, pos,
-            expanded: 0, stack: Vec::new(), events: Vec::new(),
+            expanded: 0, stack: Vec::new(), events: Vec::new(), failed_ref: None,
         }
     }
 
@@ -89,7 +93,21 @@ impl<'e, 'l> Expander<'e, 'l> {
         let mut out = Vec::with_capacity(attrs.len());
         for a in attrs {
             let cdata = declared.and_then(|d| d.get(a.name)).is_none_or(|d| d.cdata);
-            let value = self.attr_value(a.value, cdata)?;
+            self.failed_ref = None;
+            let value = self.attr_value(a.value, cdata).map_err(|e| match (e, self.failed_ref) {
+                // As libexpat does, a bad character reference in the value,
+                // or a reference to an external entity, is reported at the
+                // reference (when the tag is in the document, not in an
+                // entity); other errors at the tag.
+                (XmlError::NotWellFormed { kind, reason, .. }, Some((nth, char_ref)))
+                    if !in_entity
+                        && (kind == ErrorKind::AttributeExternalEntityRef || (char_ref && kind == ErrorKind::BadCharRef)) =>
+                {
+                    let at = a.value.match_indices('&').nth(nth).map_or(0, |(i, _)| i);
+                    XmlError::NotWellFormed { pos: a.value_pos.advance(&a.value[..at]), kind, reason }
+                }
+                (e, _) => e,
+            })?;
             out.push(Attribute { name: Cow::Borrowed(a.name), namespace: None, value, specified: true });
         }
         if let Some(declared) = declared {
@@ -136,7 +154,12 @@ impl<'e, 'l> Expander<'e, 'l> {
             out.extend(s.chars().map(|c| if matches!(c, '\t' | '\n' | '\r') { ' ' } else { c }));
         };
         let mut rest = text;
+        let mut nth = 0;
         while let Some(i) = rest.find('&') {
+            if entity.is_none() {
+                self.failed_ref = Some((nth, rest[i + 1..].starts_with('#')));
+                nth += 1;
+            }
             push_text(out, &rest[..i]);
             let after = &rest[i + 1..];
             let in_entity = |reason: String| match entity {

@@ -32,7 +32,7 @@ The implementation is derived **only** from:
 
 ## How libexpat is used
 
-libexpat appears in this project in two ways:
+libexpat appears in this project in these ways:
 
 1. **As a behavioural reference for ambiguous spec edges.** When XML 1.0
    has multiple defensible interpretations of a corner case, we run the
@@ -41,6 +41,11 @@ libexpat appears in this project in two ways:
    to learn *how* it produced the answer.
 2. **As a benchmark target.** Performance is measured against libexpat;
    any implementation choice motivated by perf parity is documented.
+3. **As the compatibility target for `expat-capi`,** the libexpat-compatible
+   C library. Its behaviour is matched to libexpat's by running the same
+   inputs through both. For a drop-in replacement it ships libexpat's
+   public header (`expat-capi/include/expat.h`, MIT, unchanged) and
+   libexpat's error message strings; nothing else is taken from libexpat.
 
 ## Why
 
@@ -53,7 +58,8 @@ system properly.
 ## Per-PR checklist
 
 Reviewers verify:
-- [ ] No code is copied from libexpat or any other XML library
+- [ ] No code is copied from libexpat or any other XML library (beyond
+      `expat-capi`'s public header and error strings, above)
 - [ ] Spec citations are present for any non-obvious behavioural choice
 - [ ] If libexpat was consulted as a behavioural reference, the test case
       documents what was checked and why our choice matches

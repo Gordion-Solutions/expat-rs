@@ -161,7 +161,8 @@ fn api_misuse() {
 fn error_positions_are_document_positions() {
     let doc = "<a>\n  <b>\n    </c>\n</a>";
     let want = whole(doc, false).unwrap_err();
-    assert_eq!((want.position().line, want.position().column), (3, 5));
+    // At the end tag's name, as libexpat reports it.
+    assert_eq!((want.position().line, want.position().column), (3, 7));
     let cuts: Vec<usize> = (1..doc.len()).collect();
     assert_eq!(streamed(doc.as_bytes(), &cuts, false).unwrap_err(), want);
 }
@@ -205,4 +206,16 @@ fn reparse_deferral_on_and_off_match_libexpat_timing() {
     p.set_reparse_deferral(false);
     p.feed(b"/>", |_| n += 1).unwrap();
     assert_eq!(n, 2, "start and end delivered once deferral is off");
+}
+
+#[test]
+fn every_line_end_counts_as_one_line() {
+    // \n, \r\n and a lone \r each end a line (§2.11), however the input is
+    // split; the error is on line 4.
+    let doc = "<a>\n\r\n\r<b></c></a>";
+    let want = whole(doc, false).unwrap_err();
+    assert_eq!((want.position().line, want.position().column), (4, 6));
+    for cut in 0..=doc.len() {
+        assert_eq!(streamed(doc.as_bytes(), &[cut], false).unwrap_err(), want, "cut {cut}");
+    }
 }

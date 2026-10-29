@@ -315,3 +315,21 @@ fn duplicate_attribute_reported_at_the_second_attribute() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn libexpat_version_rule_is_opt_in() {
+    use expat_rs::Parser;
+    let parse = |doc: &str, lenient: bool| {
+        let mut p = Parser::new(doc);
+        if lenient { p = p.with_libexpat_versions(); }
+        (|| { while p.next_event()?.is_some() {} Ok::<_, expat_rs::XmlError>(()) })()
+    };
+    for v in ["2.0", "abc", "1.0a", ""] {
+        let doc = format!("<?xml version='{v}'?><a/>");
+        assert!(parse(&doc, false).is_err(), "{v:?} rejected by default");
+        assert!(parse(&doc, true).is_ok(), "{v:?} accepted as libexpat accepts it");
+    }
+    // Outside libexpat's set: reported at the bad character (0-based col 16).
+    let e = parse("<?xml version='a:b'?><a/>", true).unwrap_err();
+    assert_eq!((e.position().line, e.position().column), (1, 17));
+}

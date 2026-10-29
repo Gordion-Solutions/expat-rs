@@ -11,7 +11,7 @@ documentation = "https://docs.rs/expat-rs"
 readme = "README.md"
 keywords = ["xml", "parser", "expat", "memory-safety"]
 categories = ["parser-implementations"]
-exclude = [".github/", "bench/"]
+exclude = [".github/", "bench/", "capi/", "expat-capi/"]
 
 [dependencies]
 thiserror = "1.0"
@@ -22,3 +22,6 @@ path = "src/bin/xmlwf.rs"
 
 [dev-dependencies]
 # minimal — conformance runner is a shell script, not a Rust dep
+
+[workspace]
+members = [".", "expat-capi"]

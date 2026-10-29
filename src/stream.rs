@@ -117,6 +117,12 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// See [`crate::Parser::with_libexpat_versions`].
+    pub fn with_libexpat_versions(mut self) -> Self {
+        self.state.libexpat_versions = true;
+        self
+    }
+
     /// See [`crate::Parser::with_namespaces`].
     pub fn with_namespaces(mut self) -> Self {
         self.state.enable_namespaces();
@@ -170,6 +176,13 @@ impl<'l> StreamParser<'l> {
         self
     }
 
+    /// How far parsing has got: the position just after the last input
+    /// processed (after a successful [`finish`](Self::finish), the end of
+    /// the document). Mirrors libexpat's position outside handlers.
+    pub fn position(&self) -> Position {
+        self.base
+    }
+
     /// See [`crate::Parser::with_amplification_limits`].
     pub fn with_amplification_limits(mut self, limits: AmplificationLimits) -> Self {
         self.state.amplification = limits;
@@ -195,12 +208,29 @@ impl<'l> StreamParser<'l> {
 
     /// Like [`feed`](Self::feed), passing each event with its [`Span`] and
     /// source text. Positions are relative to the whole document.
-    pub fn feed_located(&mut self, bytes: &[u8], handler: impl FnMut(Located<'_>)) -> Result<()> {
+    pub fn feed_located(&mut self, bytes: &[u8], mut handler: impl FnMut(Located<'_>)) -> Result<()> {
         self.guarded(Input::Bytes, |p| {
-            let unknown = &mut p.unknown_encoding;
-            p.decoder.decode_with(bytes, false, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
+            p.decode(bytes, false, &mut handler)?;
             p.run(false, handler)
         })
+    }
+
+    /// Decode `bytes` onto the buffer. A byte that can't be decoded is
+    /// reported, as libexpat does, after the input before it has been
+    /// parsed (so its events are delivered and any earlier error wins),
+    /// at its position in the document.
+    fn decode(&mut self, bytes: &[u8], last: bool, handler: &mut impl FnMut(Located<'_>)) -> Result<()> {
+        let unknown = &mut self.unknown_encoding;
+        match self.decoder.decode_with(bytes, last, &mut self.buf, &mut |name| unknown.as_mut().and_then(|f| f(name))) {
+            Err(XmlError::Encoding { kind: kind @ (ErrorKind::InvalidToken | ErrorKind::PartialChar), reason, .. }) => {
+                let deferral = std::mem::replace(&mut self.deferral, false);
+                let parsed = self.run(false, &mut *handler);
+                self.deferral = deferral;
+                parsed?;
+                Err(XmlError::Encoding { pos: self.base.advance(&self.buf), kind, reason })
+            }
+            other => other,
+        }
     }
 
     /// Parse the next chunk of the document as text. Don't mix with
@@ -228,9 +258,9 @@ impl<'l> StreamParser<'l> {
     pub fn finish_located(&mut self, handler: impl FnMut(Located<'_>)) -> Result<()> {
         let input = self.input.unwrap_or(Input::Text);
         self.guarded(input, |p| {
+            let mut handler = handler;
             if input == Input::Bytes {
-                let unknown = &mut p.unknown_encoding;
-                p.decoder.decode_with(&[], true, &mut p.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)))?;
+                p.decode(&[], true, &mut handler)?;
             }
             p.run(true, handler)?;
             p.finished = true;
@@ -263,7 +293,8 @@ impl<'l> StreamParser<'l> {
         }
         let base = self.base;
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
-            .with_edition(self.state.edition);
+            .with_edition(self.state.edition)
+            .with_libexpat_versions(self.state.libexpat_versions);
         let mut out = VecDeque::new();
         let mut consumed: Option<Position> = None;
         loop {
@@ -278,7 +309,10 @@ impl<'l> StreamParser<'l> {
                         // Text may continue in the next chunk: deliver it up
                         // to a point the next chunk can't change.
                         let keep = text.len() - text.trim_end_matches(['\r', ']']).len();
-                        if keep == text.len() {
+                        // Before the root, text other than whitespace is an
+                        // error whose position depends on the whole run.
+                        let stray = self.state.before_root() && text.contains(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'));
+                        if keep == text.len() || stray {
                             break;
                         }
                         let text: &str = &text[..text.len() - keep];
@@ -299,6 +333,13 @@ impl<'l> StreamParser<'l> {
                         break; // text was cut short; resume from `end` next time
                     }
                 }
+                // Running out of input (wherever the construct started), or
+                // an error close enough to the end to be from truncation:
+                // wait for more.
+                Err(XmlError::UnexpectedEof { .. }) if !last => break,
+                // A character that isn't allowed can't be the result of
+                // truncation: report it now, as libexpat does.
+                Err(e @ XmlError::InvalidChar { .. }) => return Err(e.rebase(base)),
                 Err(e) if !last && e.position().byte_offset + LOOKAHEAD >= self.buf.len() => break,
                 Err(e) => return Err(e.rebase(base)),
             }

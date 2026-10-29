@@ -2,6 +2,32 @@
 
 use thiserror::Error;
 
+/// Line breaks in `run` (`\n`, `\r\n` and a lone `\r` each count once),
+/// and the offset just after the last one (0 if none). `after_cr`: the byte
+/// before `run` was `\r`, so a leading `\n` completes that break.
+pub(crate) fn line_breaks(after_cr: bool, run: &[u8]) -> (u32, usize) {
+    let mut n = 0;
+    let mut line_start = 0;
+    let mut prev_cr = after_cr;
+    for (i, &b) in run.iter().enumerate() {
+        match b {
+            b'\n' if prev_cr => line_start = i + 1,
+            b'\n' | b'\r' => {
+                n += 1;
+                line_start = i + 1;
+            }
+            _ => {}
+        }
+        prev_cr = b == b'\r';
+    }
+    (n, line_start)
+}
+
+/// Characters in UTF-8 `bytes` (bytes that aren't continuation bytes).
+fn chars(bytes: &[u8]) -> u32 {
+    bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count() as u32
+}
+
 /// Position in the input — line and column are 1-based, byte offset 0-based,
 /// matching libexpat's error reporting convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,18 +47,22 @@ impl Position {
     }
 
     /// The position just after `text`, which starts here. Columns count
-    /// characters.
-    pub(crate) fn advance(mut self, text: &str) -> Position {
-        for b in text.bytes() {
-            if b == b'\n' {
-                self.line += 1;
-                self.column = 1;
-            } else if b & 0xC0 != 0x80 {
-                // Not a UTF-8 continuation byte: a new character.
-                self.column += 1;
+    /// characters; a line ends at `\n`, `\r\n` or a lone `\r` (§2.11).
+    pub fn advance(self, text: &str) -> Position {
+        self.advance_bytes(false, text.as_bytes())
+    }
+
+    /// As `advance`, over UTF-8 bytes; `after_cr` says whether the byte
+    /// just before `run` was `\r` (so a leading `\n` ends no new line).
+    pub(crate) fn advance_bytes(mut self, after_cr: bool, run: &[u8]) -> Position {
+        match line_breaks(after_cr, run) {
+            (0, _) => self.column += chars(run),
+            (n, line_start) => {
+                self.line += n;
+                self.column = 1 + chars(&run[line_start..]);
             }
         }
-        self.byte_offset += text.len();
+        self.byte_offset += run.len();
         self
     }
 

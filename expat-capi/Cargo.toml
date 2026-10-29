@@ -1,0 +1,21 @@
+[package]
+name = "expat-capi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "libexpat-compatible C ABI over expat-rs (libexpat.so.1 / libexpat.1.dylib)"
+license = "MIT"
+repository = "https://github.com/Gordion-Solutions/expat-rs"
+# Workspace-only until the ABI carries a stability promise.
+publish = false
+build = "build.rs"
+
+[lib]
+# Output is libexpat.{so,dylib,a}, so C consumers link it with -lexpat.
+# The rlib makes cargo build the library (all three kinds in one rustc
+# run) before the integration tests, which link C probes against the .a.
+name = "expat"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+expat-rs = { path = ".." }
