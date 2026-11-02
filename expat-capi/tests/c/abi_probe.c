@@ -69,6 +69,8 @@ static void element(void *u, const XML_Char *n, XML_Content *c) {
 static void sns(void *u, const XML_Char *pre, const XML_Char *uri) { printf("start-ns %s %s\n", s(pre), s(uri)); }
 static void ens(void *u, const XML_Char *pre) { printf("end-ns %s\n", s(pre)); }
 static void dflt(void *u, const XML_Char *t, int len) { printf("default [%.*s]\n", len, t); }
+/* Default handler that logs only references (what ElementTree looks for). */
+static void dflt_refs(void *u, const XML_Char *t, int len) { if (len && t[0] == '&') printf("default [%.*s]\n", len, t); }
 
 static void *my_malloc(size_t n) { mallocs++; return malloc(n); }
 static void *my_realloc(void *x, size_t n) { return realloc(x, n); }
@@ -130,6 +132,33 @@ static int latin2_ish(void *data, const XML_Char *name, XML_Encoding *info) {
   return XML_STATUS_OK;
 }
 static int refuse_encoding(void *data, const XML_Char *name, XML_Encoding *info) { return XML_STATUS_ERROR; }
+
+/* External entities: the handler parses each entity's content with a
+   child parser, whose events go to the same handlers. */
+static const char *entity_body;
+static int external(XML_Parser parser, const XML_Char *context, const XML_Char *base,
+                    const XML_Char *sys, const XML_Char *pub) {
+  printf("external context=%s sys=%s pub=%s\n", context ? "(set)" : "(null)", s(sys), s(pub));
+  if (!context || !entity_body) return 1;
+  XML_Parser child = XML_ExternalEntityParserCreate(parser, context, NULL);
+  int ok = XML_Parse(child, entity_body, (int)strlen(entity_body), 1);
+  printf("child parse -> %d", ok);
+  if (!ok) printf(" '%s'", XML_ErrorString(XML_GetErrorCode(child)));
+  printf("\n");
+  XML_ParserFree(child);
+  return 1;
+}
+static int refuse_external(XML_Parser parser, const XML_Char *c, const XML_Char *b, const XML_Char *s1,
+                           const XML_Char *p1) { return 0; }
+static void ext_doc(const char *label, const char *doc, const char *body, int pep, int foreign, int ns) {
+  p = ns ? XML_ParserCreateNS(NULL, '|') : XML_ParserCreate(NULL);
+  all_handlers();
+  XML_SetExternalEntityRefHandler(p, external);
+  if (pep) XML_SetParamEntityParsing(p, pep == 1 ? XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE : XML_PARAM_ENTITY_PARSING_ALWAYS);
+  if (foreign) XML_UseForeignDTD(p, XML_TRUE);
+  entity_body = body;
+  parse_whole(label, doc);
+}
 
 int main(void) {
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -256,6 +285,38 @@ int main(void) {
               "<!DOCTYPE d [<!ENTITY a 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'>"
               "<!ENTITY b '&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;'>]>"
               "<d>&b;&b;&b;&b;&b;&b;&b;&b;</d>");
+
+  {
+    const char *dtd = "<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'><!ENTITY i 'int'>]><r>a&e;b</r>";
+    ext_doc("external entity read by a child parser", dtd, "<?xml encoding='utf-8'?><x/>t&i;<y/>", 0, 0, 0);
+    ext_doc("child: empty entity", dtd, "", 0, 0, 0);
+    ext_doc("child: text declaration without encoding", dtd, "<?xml version='1.0'?>hi", 0, 0, 0);
+    ext_doc("child: unclosed element", dtd, "<x>", 0, 0, 0);
+    ext_doc("child: undefined entity", dtd, "&nope;", 0, 0, 0);
+    ext_doc("child: namespaces in scope",
+            "<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'>]><r xmlns:p='urn:p'>&e;</r>", "<p:x/>", 0, 0, 1);
+    ext_doc("external DTD, parameter entities never", "<!DOCTYPE r SYSTEM 'r.dtd' [<!ENTITY i 'x'>]><r/>", NULL, 0, 0, 0);
+    ext_doc("external DTD, unless standalone", "<!DOCTYPE r SYSTEM 'r.dtd' [<!ENTITY i 'x'>]><r/>", NULL, 1, 0, 0);
+    ext_doc("external DTD, standalone document",
+            "<?xml version='1.0' standalone='yes'?><!DOCTYPE r SYSTEM 'r.dtd'><r/>", NULL, 1, 0, 0);
+    ext_doc("foreign DTD, no DOCTYPE", "<r/>", NULL, 2, 1, 0);
+    ext_doc("foreign DTD, internal subset only", "<!DOCTYPE r [<!ENTITY i 'x'>]><r/>", NULL, 2, 1, 0);
+  }
+  p = XML_ParserCreate(NULL); XML_SetDefaultHandler(p, dflt_refs);
+  parse_whole("external entity without a handler goes to the default handler",
+              "<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'>]><r>&e;</r>");
+  p = XML_ParserCreate(NULL); XML_SetExternalEntityRefHandler(p, refuse_external);
+  parse_whole("external entity handler returning 0", "<!DOCTYPE r [<!ENTITY e SYSTEM 'e.xml'>]><r>&e;</r>");
+  {
+    printf("=== child parser settings\n");
+    XML_Parser root = XML_ParserCreate(NULL);
+    XML_Parser child = XML_ExternalEntityParserCreate(root, NULL, NULL);
+    printf("threshold on child -> %d, factor on child -> %d\n",
+           XML_SetBillionLaughsAttackProtectionActivationThreshold(child, 1000),
+           XML_SetBillionLaughsAttackProtectionMaximumAmplification(child, 50.0f));
+    XML_ParserFree(child);
+    XML_ParserFree(root);
+  }
 
   printf("=== errors and version\n");
   printf("ErrorString(0)=%s ErrorString(9999)=%s\n", s(XML_ErrorString(0)), s(XML_ErrorString(9999)));

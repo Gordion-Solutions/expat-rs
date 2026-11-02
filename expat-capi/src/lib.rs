@@ -32,7 +32,7 @@ use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr
 use std::ptr;
 
 use expat_rs::{
-    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, ErrorKind, Event, Located, Position, Quantifier, Span,
+    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, EntityContext, ErrorKind, Event, Located, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
 use generated::*;
@@ -48,6 +48,8 @@ pub type XML_Size = c_ulong;
 pub type XML_Index = c_long;
 pub type XML_Parser = *mut Shim;
 
+const XML_PARAM_ENTITY_PARSING_NEVER: c_int = 0;
+const XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: c_int = 1;
 const XML_TRUE: XML_Bool = 1;
 const XML_FALSE: XML_Bool = 0;
 const XML_STATUS_ERROR: XML_Status = 0;
@@ -167,6 +169,32 @@ struct Handlers {
     attlist_decl: Cell<AttlistDeclHandler>,
 }
 
+impl Handlers {
+    /// Take on another parser's handlers (an external entity parser starts
+    /// with its parent's).
+    fn copy_from(&self, other: &Handlers) {
+        macro_rules! copy { ($($f:ident)*) => { $(self.$f.set(other.$f.get());)* } }
+        copy!(start_element end_element character_data processing_instruction comment start_cdata
+              end_cdata default default_expand start_doctype end_doctype entity_decl
+              unparsed_entity_decl notation_decl start_namespace end_namespace not_standalone
+              external_entity_ref skipped_entity xml_decl element_decl attlist_decl);
+    }
+}
+
+/// What kind of parser a `Shim` is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// From `XML_ParserCreate*`: parses a document.
+    Root,
+    /// From `XML_ExternalEntityParserCreate` with a context: parses an
+    /// external entity's content.
+    Entity,
+    /// From `XML_ExternalEntityParserCreate` without a context: would parse
+    /// an external DTD subset or parameter entity, which expat-capi doesn't
+    /// read (as a non-validating parser may, XML 1.0 §5.1).
+    Dtd,
+}
+
 /// Where parsing has got to.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Status {
@@ -217,6 +245,36 @@ pub struct Shim {
     id_attributes: RefCell<std::collections::HashMap<String, String>>,
     /// `XML_GetIdAttributeIndex` for the current start tag.
     id_index: Cell<c_int>,
+    /// `standalone="yes"` in the XML declaration.
+    standalone: Cell<bool>,
+    role: Role,
+    /// Entity children: what the parser for the entity's content needs.
+    entity: Option<EntityContext>,
+    /// Contexts of the external entity references reported to the
+    /// handler, by the context string passed with them, for
+    /// `XML_ExternalEntityParserCreate`; and the latest one.
+    entity_contexts: RefCell<std::collections::HashMap<CString, EntityContext>>,
+    last_entity_context: RefCell<Option<EntityContext>>,
+    /// The DOCTYPE's external identifiers, once seen: (system, public).
+    doctype_ids: RefCell<Option<(Option<CString>, Option<CString>)>>,
+    /// The foreign DTD (`XML_UseForeignDTD`) has been asked for.
+    foreign_dtd_done: Cell<bool>,
+    /// The first bytes of input, until it is known whether they are a
+    /// byte order mark, and whether they were (libexpat counts a byte
+    /// order mark as a column on line 1; expat-rs doesn't).
+    head: RefCell<Vec<u8>>,
+    bom: Cell<Option<bool>>,
+    /// The input is UTF-16 (from a byte order mark or a zero byte at the
+    /// start, as libexpat detects it).
+    utf16: Cell<bool>,
+    /// Character data is delivered in pieces of at most `TEXT_PIECE` bytes:
+    /// libexpat does this for input it has to convert (anything but UTF-8
+    /// and US-ASCII).
+    chunk_text: Cell<bool>,
+    /// Error to report when a handler stops parsing (`XML_StopParser` is
+    /// XML_ERROR_ABORTED; a not-standalone handler returning 0 is
+    /// XML_ERROR_NOT_STANDALONE).
+    stop_error: Cell<XML_Error>,
     /// Namespace separator from `XML_ParserCreateNS` (`Some(0)`: names are
     /// concatenated without one).
     ns_sep: Option<u8>,
@@ -264,6 +322,18 @@ impl Shim {
             current_raw: RefCell::new(String::new()),
             id_attributes: RefCell::new(std::collections::HashMap::new()),
             id_index: Cell::new(-1),
+            standalone: Cell::new(false),
+            role: Role::Root,
+            entity: None,
+            entity_contexts: RefCell::new(std::collections::HashMap::new()),
+            last_entity_context: RefCell::new(None),
+            doctype_ids: RefCell::new(None),
+            foreign_dtd_done: Cell::new(false),
+            head: RefCell::new(Vec::new()),
+            bom: Cell::new(None),
+            utf16: Cell::new(false),
+            chunk_text: Cell::new(false),
+            stop_error: Cell::new(XML_ERROR_ABORTED),
             ns_sep,
             ns_triplets: Cell::new(false),
             base: RefCell::new(None),
@@ -302,19 +372,30 @@ impl Shim {
     /// The expat-rs parser for this shim, configured from the options set
     /// so far.
     fn make_parser(&self) -> StreamParser<'static> {
-        // libexpat applies the Fourth Edition's name rules (Appendix B)
-        // but accepts any version number made of name characters.
-        let mut p = StreamParser::new()
-            .with_edition(Edition::Fourth)
-            .with_libexpat_versions()
-            .with_reparse_deferral(self.reparse_deferral.get())
-            .with_amplification_limits(self.amplification.get());
-        if self.ns_sep.is_some() {
-            p = p.with_namespaces();
-        }
+        let mut p = match &self.entity {
+            // Edition, version rule, namespaces and limits come from the
+            // document.
+            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()),
+            None => {
+                // libexpat applies the Fourth Edition's name rules
+                // (Appendix B) but accepts any version number made of name
+                // characters.
+                let mut p = StreamParser::new()
+                    .with_edition(Edition::Fourth)
+                    .with_libexpat_versions()
+                    .with_external_entity_refs()
+                    .with_reparse_deferral(self.reparse_deferral.get())
+                    .with_amplification_limits(self.amplification.get());
+                if self.ns_sep.is_some() {
+                    p = p.with_namespaces();
+                }
+                p
+            }
+        };
         if let Some(enc) = self.encoding.borrow().as_deref() {
             p = p.with_encoding(enc);
         }
+        self.chunk_text.set(self.converts(None));
         let (handler, data) = self.unknown_encoding.get();
         if let Some(handler) = handler {
             p = p.with_unknown_encoding(move |name| byte_map_from_c(handler, data, name));
@@ -333,10 +414,16 @@ impl Shim {
             }
             _ => {}
         }
+        if self.role == Role::Dtd {
+            // External DTD subsets aren't read (see `Role::Dtd`).
+            self.status.set(if is_final { Status::Finished } else { Status::Parsing });
+            return XML_STATUS_OK;
+        }
         let Ok(mut core) = self.core.try_borrow_mut() else {
             // XML_Parse from inside one of this parser's own handlers.
             return XML_STATUS_ERROR;
         };
+        self.note_bom(input, is_final);
         let parser = core.get_or_insert_with(|| self.make_parser());
         self.status.set(Status::Parsing);
         let mut deliver = |l: Located<'_>| {
@@ -359,7 +446,7 @@ impl Shim {
         drop(core);
         if self.stop_requested.get() {
             self.pos.set(self.token_end.get());
-            self.error.set(XML_ERROR_ABORTED);
+            self.error.set(self.stop_error.get());
             self.status.set(Status::Failed);
             return XML_STATUS_ERROR;
         }
@@ -378,6 +465,45 @@ impl Shim {
         }
     }
 
+    /// Whether libexpat would convert this input to UTF-8 (anything but
+    /// UTF-8 and US-ASCII), given the declared encoding, if any.
+    fn converts(&self, declared: Option<&str>) -> bool {
+        let forced = self.encoding.borrow().clone();
+        match forced.as_deref().or(declared) {
+            _ if self.utf16.get() && forced.is_none() => true,
+            None => self.utf16.get(),
+            Some(enc) => !["UTF-8", "US-ASCII", "ASCII"].iter().any(|n| enc.eq_ignore_ascii_case(n)),
+        }
+    }
+
+    /// Watch the first bytes of input for a byte order mark.
+    fn note_bom(&self, input: &[u8], is_final: bool) {
+        if self.bom.get().is_some() {
+            return;
+        }
+        let Ok(mut head) = self.head.try_borrow_mut() else { return };
+        let want = 3usize.saturating_sub(head.len());
+        head.extend(input.iter().take(want));
+        let utf8 = [0xEF, 0xBB, 0xBF];
+        if let [0xFF, 0xFE, ..] | [0xFE, 0xFF, ..] | [0x00, _, ..] | [_, 0x00, ..] = head.as_slice() {
+            self.utf16.set(true);
+        }
+        let decided = match head.as_slice() {
+            [0xFF, 0xFE, ..] | [0xFE, 0xFF, ..] => Some(true),
+            h if h.len() >= 3 || is_final => Some(h.starts_with(&utf8)),
+            h if utf8.starts_with(h) => None, // may still be one
+            _ => Some(false),
+        };
+        self.bom.set(decided);
+    }
+
+    /// libexpat's column for `pos`: 0-based, and counting a byte order mark
+    /// as a column on line 1.
+    fn column(&self, pos: Position) -> XML_Size {
+        let bom = (pos.line == 1 && self.bom.get() == Some(true)) as u32;
+        (pos.column.saturating_sub(1) + bom) as XML_Size
+    }
+
     fn fail(&self, e: &XmlError) {
         self.pos.set(e.position());
         self.error.set(error_code(e.kind()));
@@ -394,21 +520,48 @@ fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *
     // `name` is a valid C string and `info` a valid, writable XML_Encoding
     // for the duration of the call.
     let ok = unsafe { handler(data, name.as_ptr(), &mut info) };
-    let map = (ok == XML_STATUS_OK).then(|| {
+    let map = (ok == XML_STATUS_OK && acceptable_map(&info.map)).then(|| {
         let mut map: ByteMap = Box::new([None; 256]);
         for (byte, &entry) in info.map.iter().enumerate() {
-            // Negative entries are invalid bytes or multi-byte lead bytes;
-            // multi-byte encodings (`convert`) aren't supported yet.
+            // -1 marks a byte that is invalid in the encoding.
             map[byte] = u32::try_from(entry).ok().and_then(char::from_u32);
         }
         map
     });
-    let multibyte = info.map.iter().any(|&e| e < -1);
     if let Some(release) = info.release {
         // SAFETY: release takes the data pointer the handler stored in info.
         unsafe { release(info.data) };
     }
-    if multibyte { None } else { map }
+    map
+}
+
+/// Largest piece of character data libexpat delivers for input it
+/// converts to UTF-8, in bytes.
+const TEXT_PIECE: usize = 1024;
+
+/// ASCII characters with a meaning in XML's syntax: whitespace, letters,
+/// digits and markup punctuation.
+const XML_SYNTAX_CHARS: &[u8] =
+    b"\t\n\r !\"#%&'()*+,-./0123456789:;<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz|";
+
+/// Whether libexpat would accept an unknown-encoding handler's map: each
+/// of XML's syntax characters is its own byte and no other byte stands for
+/// one, and there are no multi-byte sequences (entries below -1), which
+/// would need the `convert` callback expat-capi doesn't support. Other
+/// maps are an unknown encoding. (Found by black-box tests of libexpat:
+/// remapping `$` or a control byte is accepted, `A`, `<` or LF is not.)
+fn acceptable_map(map: &[c_int; 256]) -> bool {
+    let is_syntax = |c: c_int| u8::try_from(c).is_ok_and(|c| XML_SYNTAX_CHARS.contains(&c));
+    map.iter().enumerate().all(|(byte, &entry)| {
+        let byte = byte as c_int;
+        if entry < -1 {
+            false // a multi-byte sequence
+        } else if is_syntax(byte) {
+            entry == byte // a syntax character must be its own byte
+        } else {
+            !is_syntax(entry) // and no other byte may stand for one
+        }
+    })
 }
 
 /// libexpat's error code for an expat-rs error kind.
@@ -527,16 +680,44 @@ impl Shim {
                 raw.push_str(l.raw);
             }
         }
+        match &l.event {
+            Event::XmlDecl(d) => {
+                self.standalone.set(d.standalone == Some(true));
+                self.chunk_text.set(self.converts(d.encoding));
+            }
+            Event::Doctype { system_id, public_id, .. } => {
+                *self.doctype_ids.borrow_mut() = Some((opt_cstr(system_id.as_deref()), opt_cstr(public_id.as_deref())));
+                // An external subset: libexpat asks before the DOCTYPE
+                // handler.
+                if system_id.is_some() || public_id.is_some() {
+                    self.not_standalone();
+                    if self.stop_requested.get() {
+                        return;
+                    }
+                }
+            }
+            // A document without a DOCTYPE asks for its foreign DTD before
+            // the root element.
+            Event::StartElement { .. } if self.role == Role::Root && self.doctype_ids.borrow().is_none() => {
+                self.external_dtd(None);
+                if self.stop_requested.get() {
+                    return;
+                }
+            }
+            _ => {}
+        }
         let h = &self.handlers;
         let ud = self.ud();
         match l.event {
             Event::XmlDecl(d) => match h.xml_decl.get() {
                 Some(f) => {
-                    let (v, e) = (cstr(d.version), opt_cstr(d.encoding));
+                    // A text declaration may have no version: NULL, as in
+                    // libexpat.
+                    let (v, e) = (opt_cstr(Some(d.version).filter(|v| !v.is_empty())), opt_cstr(d.encoding));
                     let standalone = d.standalone.map_or(-1, |s| s as c_int);
                     // SAFETY: registered XmlDeclHandler; string arguments are
                     // valid C strings (or null) for the call.
-                    unsafe { f(ud, v.as_ptr(), ptr_of(&e), standalone) };
+                    unsafe { f(ud, ptr_of(&v), ptr_of(&e), standalone) };
                 }
                 None => {
                     self.to_default(l.raw);
@@ -554,6 +735,13 @@ impl Shim {
                 }
             },
             Event::EndDoctype => {
+                // The external subset (or a foreign DTD) is asked for after
+                // the internal subset, as in libexpat.
+                let ids = self.doctype_ids.borrow().clone();
+                self.external_dtd(ids);
+                if self.stop_requested.get() {
+                    return;
+                }
                 if let Some(f) = h.end_doctype.get() {
                     // SAFETY: registered EndDoctypeDeclHandler.
                     unsafe { f(ud) };
@@ -702,16 +890,19 @@ impl Shim {
                 let base = self.base.borrow().clone();
                 let (n, s, p, no) =
                     (cstr(&name), opt_cstr(system_id.as_deref()), opt_cstr(public_id.as_deref()), opt_cstr(notation.as_deref()));
-                if let Some(f) = h.entity_decl.get() {
+                // An unparsed (NDATA) entity goes to the unparsed-entity
+                // handler when there is one, as in libexpat; otherwise, like
+                // every other entity, to the entity handler.
+                if let (Some(f), Some(_)) = (h.unparsed_entity_decl.get(), &no) {
+                    // SAFETY: registered UnparsedEntityDeclHandler; valid C
+                    // strings (or null).
+                    unsafe { f(ud, n.as_ptr(), ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
+                } else if let Some(f) = h.entity_decl.get() {
                     let (vptr, vlen) = value.as_deref().map_or((ptr::null(), 0), |v| (v.as_ptr().cast(), v.len() as c_int));
                     // SAFETY: registered EntityDeclHandler; the value is
                     // valid for its length (not NUL-terminated, as in
                     // libexpat), the rest valid C strings or null.
                     unsafe { f(ud, n.as_ptr(), parameter as c_int, vptr, vlen, ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
-                } else if let (Some(f), Some(_)) = (h.unparsed_entity_decl.get(), &no) {
-                    // SAFETY: registered UnparsedEntityDeclHandler; valid C
-                    // strings (or null).
-                    unsafe { f(ud, n.as_ptr(), ptr_of(&base), ptr_of(&s), ptr_of(&p), ptr_of(&no)) };
                 }
             }
             Event::StartNamespace { prefix, uri } => {
@@ -728,6 +919,36 @@ impl Shim {
                     // SAFETY: registered EndNamespaceDeclHandler; valid C
                     // string or null.
                     unsafe { f(ud, ptr_of(&p)) };
+                }
+            }
+            Event::ParameterEntityRef(_) => self.not_standalone(),
+            Event::ExternalEntityRef { name, system_id, public_id, context } => {
+                // With no handler, libexpat passes the reference to the
+                // default handler (ElementTree relies on this).
+                let Some(f) = h.external_entity_ref.get() else {
+                    self.to_default(l.raw);
+                    return;
+                };
+                {
+                    // The context string identifies the reference to
+                    // XML_ExternalEntityParserCreate; the namespace
+                    // declarations in scope travel in `context` itself.
+                    let key = cstr(&name);
+                    if let Ok(mut contexts) = self.entity_contexts.try_borrow_mut() {
+                        contexts.insert(key.clone(), context.clone());
+                    }
+                    *self.last_entity_context.borrow_mut() = Some(context);
+                    let base = self.base.borrow().clone();
+                    let (s, p) = (cstr(&system_id), opt_cstr(public_id.as_deref()));
+                    let me = (self as *const Shim).cast_mut();
+                    // SAFETY: registered ExternalEntityRefHandler, given this
+                    // parser and valid C strings (or null).
+                    if unsafe { f(me, key.as_ptr(), ptr_of(&base), s.as_ptr(), ptr_of(&p)) } == 0 {
+                        // Reported at the reference, as libexpat does.
+                        self.token_end.set(self.pos.get());
+                        self.stop_error.set(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
+                        self.stop_requested.set(true);
+                    }
                 }
             }
             Event::SkippedEntity(name) => match h.skipped_entity.get() {
@@ -750,6 +971,51 @@ impl Shim {
     /// piece is reported where it is in the source; text that came from an
     /// entity is all reported at the reference. Stops early if a handler
     /// calls `XML_StopParser`.
+    /// Ask the external entity handler for the external DTD subset
+    /// (`ids`: the DOCTYPE's system and public identifiers), or for the
+    /// foreign DTD when the document names none, as libexpat does when
+    /// parameter entities are parsed: XML_PARAM_ENTITY_PARSING_ALWAYS, or
+    /// UNLESS_STANDALONE in a document that isn't standalone. Once only.
+    fn external_dtd(&self, ids: Option<(Option<CString>, Option<CString>)>) {
+        let (Some(f), pep) = (self.handlers.external_entity_ref.get(), self.param_entity_parsing.get()) else { return };
+        if self.foreign_dtd_done.get() || pep == XML_PARAM_ENTITY_PARSING_NEVER
+            || (pep == XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE && self.standalone.get())
+        {
+            return;
+        }
+        let (system, public) = match ids {
+            Some((s, p)) if s.is_some() || p.is_some() => (s, p),
+            _ if self.use_foreign_dtd.get() => (None, None),
+            _ => return,
+        };
+        self.foreign_dtd_done.set(true);
+        let base = self.base.borrow().clone();
+        let me = (self as *const Shim).cast_mut();
+        // SAFETY: registered ExternalEntityRefHandler, given this parser, a
+        // null context (a DTD) and valid C strings or null.
+        if unsafe { f(me, ptr::null(), ptr_of(&base), ptr_of(&system), ptr_of(&public)) } == 0 {
+            self.stop_error.set(XML_ERROR_EXTERNAL_ENTITY_HANDLING);
+            self.stop_requested.set(true);
+        }
+    }
+
+    /// A reference the document's own content can't resolve (an external
+    /// subset, a parameter entity): unless it declared itself standalone,
+    /// libexpat asks the not-standalone handler whether to go on; 0 means
+    /// stop with XML_ERROR_NOT_STANDALONE.
+    fn not_standalone(&self) {
+        if self.standalone.get() {
+            return;
+        }
+        if let Some(f) = self.handlers.not_standalone.get() {
+            // SAFETY: registered NotStandaloneHandler.
+            if unsafe { f(self.ud()) } == 0 {
+                self.stop_error.set(XML_ERROR_NOT_STANDALONE);
+                self.stop_requested.set(true);
+            }
+        }
+    }
+
     fn character_data(&self, text: &str, raw: &str, start: Position) {
         let from_source = if raw.contains('\r') {
             raw.replace("\r\n", "\n").replace('\r', "\n") == text
@@ -810,15 +1076,38 @@ impl Shim {
     }
 
     fn deliver_chars(&self, text: &str, raw: &str) {
+        if self.chunk_text.get() && text.len() > TEXT_PIECE {
+            // Split at character boundaries, as libexpat's conversion does.
+            let (mut rest_text, mut rest_raw) = (text, raw);
+            while !rest_text.is_empty() && !self.stop_requested.get() {
+                let mut cut = TEXT_PIECE.min(rest_text.len());
+                while !rest_text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                let (piece, after) = rest_text.split_at(cut);
+                // Raw text is the same as the text here (no line ends, no
+                // references); otherwise give the default handler all of it.
+                let (raw_piece, raw_after) = if rest_raw == rest_text { rest_raw.split_at(cut) } else { (rest_raw, "") };
+                self.deliver_piece(piece, raw_piece);
+                rest_text = after;
+                rest_raw = raw_after;
+            }
+            return;
+        }
+        self.deliver_piece(text, raw);
+    }
+
+    fn deliver_piece(&self, text: &str, raw: &str) {
         match self.handlers.character_data.get() {
             Some(f) => {
                 // SAFETY: registered CharacterDataHandler; `text` is valid
                 // for its length during the call.
                 unsafe { f(self.ud(), text.as_ptr().cast(), text.len() as c_int) };
             }
-            None => {
+            None if !raw.is_empty() => {
                 self.to_default(raw);
             }
+            None => {}
         }
     }
 
@@ -1012,6 +1301,7 @@ pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool)
             XML_STATUS_ERROR
         }
         Status::Parsing => {
+            p.stop_error.set(XML_ERROR_ABORTED);
             p.stop_requested.set(true);
             XML_STATUS_OK
         }
@@ -1042,7 +1332,7 @@ pub unsafe extern "C" fn XML_GetCurrentLineNumber(parser: XML_Parser) -> XML_Siz
 pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> XML_Size {
     // libexpat's columns are 0-based; expat-rs's are 1-based.
     // SAFETY: see `shim`.
-    unsafe { shim(parser) }.map_or(0, |p| p.pos.get().column.saturating_sub(1) as XML_Size)
+    unsafe { shim(parser) }.map_or(0, |p| p.column(p.pos.get()))
 }
 
 #[no_mangle]
@@ -1235,6 +1525,9 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionActivationThreshold
 ) -> XML_Bool {
     // SAFETY: see `shim`.
     let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+    if p.role != Role::Root {
+        return XML_FALSE; // a setting for the whole document
+    }
     let mut limits = p.amplification.get();
     limits.activation_threshold = activation_threshold_bytes;
     p.amplification.set(limits);
@@ -1248,6 +1541,9 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplificatio
 ) -> XML_Bool {
     // SAFETY: see `shim`.
     let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+    if p.role != Role::Root {
+        return XML_FALSE; // a setting for the whole document
+    }
     if maximum_amplification_factor.is_nan() || maximum_amplification_factor < 1.0 {
         return XML_FALSE;
     }
@@ -1259,12 +1555,39 @@ pub unsafe extern "C" fn XML_SetBillionLaughsAttackProtectionMaximumAmplificatio
 
 #[no_mangle]
 pub unsafe extern "C" fn XML_ExternalEntityParserCreate(
-    _parser: XML_Parser,
-    _context: *const XML_Char,
-    _encoding: *const XML_Char,
+    parser: XML_Parser,
+    context: *const XML_Char,
+    encoding: *const XML_Char,
 ) -> XML_Parser {
-    // External entity parsers come in phase 5.
-    ptr::null_mut()
+    // SAFETY: see `shim`; context and encoding are null or valid C strings.
+    let Some(parent) = (unsafe { shim(parser) }) else { return ptr::null_mut() };
+    let encoding = unsafe { c_arg(encoding) };
+    let (role, entity) = if context.is_null() {
+        (Role::Dtd, None)
+    } else {
+        // SAFETY: a valid C string, per the API.
+        let key = unsafe { CStr::from_ptr(context) };
+        // The reference this context was given with; failing that, the
+        // latest one (a handler may pass a context of its own).
+        let entity = parent.entity_contexts.try_borrow().ok().and_then(|c| c.get(key).cloned())
+            .or_else(|| parent.last_entity_context.try_borrow().ok().and_then(|c| c.clone()));
+        match entity {
+            Some(entity) => (Role::Entity, Some(entity)),
+            None => (Role::Dtd, None),
+        }
+    };
+    let mut child = Shim::new(encoding, Some(parent.memsuite), parent.ns_sep);
+    child.role = role;
+    child.entity = entity;
+    child.handlers.copy_from(&parent.handlers);
+    child.unknown_encoding.set(parent.unknown_encoding.get());
+    child.user_data.set(parent.user_data.get());
+    child.parser_as_arg.set(parent.parser_as_arg.get());
+    child.ns_triplets.set(parent.ns_triplets.get());
+    child.reparse_deferral.set(parent.reparse_deferral.get());
+    child.param_entity_parsing.set(parent.param_entity_parsing.get());
+    *child.base.borrow_mut() = parent.base.borrow().clone();
+    Box::into_raw(Box::new(child))
 }
 
 #[no_mangle]

@@ -26,6 +26,7 @@ use crate::entities::{builtin_entity, AttlistTable, EntityDef, EntityTable, Expa
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::lexer::Lexer;
 use crate::event::{normalize_newlines, Attribute, Event};
+use crate::external::EntityContext;
 use crate::token::{Attr, Token};
 
 fn owned(s: &str) -> Cow<'static, str> {
@@ -37,6 +38,15 @@ fn owned(s: &str) -> Cow<'static, str> {
 /// `Err(reason)` if it should be read but can't be.
 pub type ExternalLoader<'l> =
     dyn FnMut(&str, Option<&str>) -> std::result::Result<Option<String>, String> + 'l;
+
+/// The document's settings an `Expander` works to.
+#[derive(Clone, Copy)]
+pub(crate) struct ExpandSettings {
+    pub limits: ExpansionLimits,
+    pub edition: Edition,
+    /// Whether §4.1 WFC Entity Declared applies to this document.
+    pub entity_declared_wfc: bool,
+}
 
 pub(crate) struct Expander<'e, 'l> {
     pub table: &'e EntityTable,
@@ -54,6 +64,9 @@ pub(crate) struct Expander<'e, 'l> {
     stack: Vec<String>,
     /// Events produced by expanding content entities, in document order.
     pub events: Vec<Event<'static>>,
+    /// When external entity references are reported for the caller to read
+    /// (see `crate::external`): the document's part of their context.
+    external: Option<EntityContext>,
     /// While normalising an attribute value: which of its references
     /// (0 = the first `&`) is being processed, and whether it is a
     /// character reference, so an error can be placed.
@@ -64,14 +77,14 @@ impl<'e, 'l> Expander<'e, 'l> {
     pub fn new(
         table: &'e EntityTable,
         attlists: &'e AttlistTable,
-        limits: ExpansionLimits,
-        edition: Edition,
-        entity_declared_wfc: bool,
+        settings: ExpandSettings,
         loader: Option<&'e mut ExternalLoader<'l>>,
         pos: Position,
+        external: Option<EntityContext>,
     ) -> Self {
+        let ExpandSettings { limits, edition, entity_declared_wfc } = settings;
         Self {
-            table, attlists, limits, edition, entity_declared_wfc, loader, pos,
+            table, attlists, limits, edition, entity_declared_wfc, loader, pos, external,
             expanded: 0, stack: Vec::new(), events: Vec::new(), failed_ref: None,
         }
     }
@@ -241,11 +254,32 @@ impl<'e, 'l> Expander<'e, 'l> {
                         self.leave();
                         Ok(())
                     }
-                    None => {
-                        // Not read (§4.4.3).
-                        self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
-                        Ok(())
-                    }
+                    None => match &self.external {
+                        Some(document) => {
+                            // Reported for the caller to read, unless that
+                            // would read an entity from inside itself.
+                            if document.open.iter().chain(&self.stack).any(|open| open == name) {
+                                return Err(self.error(ErrorKind::RecursiveEntityRef, format!(
+                                    "entity {name:?} refers to itself (No Recursion)")));
+                            }
+                            let mut context = document.clone();
+                            context.name = name.to_string();
+                            context.open.extend(self.stack.iter().cloned());
+                            context.open.push(name.to_string());
+                            self.events.push(Event::ExternalEntityRef {
+                                name: Cow::Owned(name.to_string()),
+                                system_id: Cow::Owned(system_id.clone()),
+                                public_id: public_id.clone().map(Cow::Owned),
+                                context,
+                            });
+                            Ok(())
+                        }
+                        None => {
+                            // Not read (§4.4.3).
+                            self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
+                            Ok(())
+                        }
+                    },
                 }
             }
             Some(EntityDef::Internal(text)) => {

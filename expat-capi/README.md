@@ -37,6 +37,19 @@ name rules and accepts any version number made of `[A-Za-z0-9._-]`. Handlers may
 libexpat allows; calling `XML_Parse` from inside a handler fails cleanly.
 See the safety notes at the top of `src/lib.rs`.
 
+## CPython
+
+CPython 3.14 builds against expat-capi (`./configure --with-system-expat
+LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
+-Wl,-rpath,<staged dir> -lexpat"`) and, on 21 Oct 2026 (macOS, debug build):
+
+- its 11 XML test files (`test_pyexpat`, `test_xml_etree`, `test_xml_etree_c`,
+  `test_sax`, `test_minidom`, `test_pulldom`, `test_xml_dom_minicompat`,
+  `test_xml_dom_xmlbuilder`, `test_plistlib`, `test_xmlrpc`,
+  `test_docxmlrpc`) pass: 1088 tests, the same 36 skipped as with libexpat
+  2.8.2 (12 of them need a 2.7.2 or later header);
+- its whole test suite passes: 47,976 tests in 529 files.
+
 ## Testing
 
 `cargo test -p expat-capi` builds each `tests/c/*.c` probe against
@@ -49,9 +62,9 @@ encodings, content models, settings.
 `tools/xmlwf_suite.py` runs libexpat's own `xmlwf` (a dynamically linked
 build, such as Homebrew's) over the W3C conformance suite on libexpat and on
 expat-capi and compares exit status, messages and written output in five
-modes. On 12 Oct 2026, 2638 files: every document libexpat accepts gives
+modes. On 21 Oct 2026, 2638 files: every document libexpat accepts gives
 identical output except `eduni/misc/007.xml` (below); no document libexpat
-rejects is accepted; about 1100 malformed documents get a different error
+rejects is accepted; about 1050 malformed documents get a different error
 message or position (see below).
 
 `src/generated.rs` (constants, error strings, struct sizes) is generated
@@ -68,11 +81,14 @@ both tools use libexpat only as a black box.
 - With an unknown encoding, libexpat calls the XML-declaration handler
   before the unknown-encoding handler; expat-capi calls it after.
 - Multi-byte unknown encodings (`XML_Encoding.convert`) are refused.
-- `XML_ExternalEntityParserCreate` returns NULL (external entities: phase 5).
+- External DTD subsets and external parameter entities aren't read: a
+  parser from `XML_ExternalEntityParserCreate` with a NULL context accepts
+  its input without parsing it (a non-validating parser may skip them,
+  XML 1.0 §5.1). External parsed entities in content are fully supported.
 - `XML_StopParser(parser, XML_TRUE)` (suspend) isn't supported;
   `XML_ResumeParser` isn't exported.
 - `XML_GetInputContext` returns NULL.
-- For about 1100 of the suite's malformed documents (mostly in DTDs) the
+- For about 1050 of the suite's malformed documents (mostly in DTDs) the
   error is classified or placed differently: libexpat's grammar reports
   "syntax error" where expat-rs finds an invalid token and the reverse,
   and positions follow. Same verdict in every case.

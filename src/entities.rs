@@ -104,10 +104,10 @@ pub(crate) enum DtdDecl {
     Comment(String),
     /// A notation declaration (§4.7).
     Notation { name: String, public_id: Option<String>, system_id: Option<String> },
-    /// A parameter-entity reference between declarations (§2.8 DeclSep).
-    /// Parameter entities are not expanded yet, so per §5.1 declarations
-    /// after one are not processed.
-    PeRef,
+    /// A parameter-entity reference between declarations (§2.8 DeclSep),
+    /// by entity name. Parameter entities are not expanded yet, so per §5.1
+    /// declarations after one are not processed.
+    PeRef(String),
 }
 
 /// The parts of a DOCTYPE the parser needs after tokenising.
@@ -121,7 +121,7 @@ pub(crate) struct Dtd {
 }
 
 /// Declared general entities, by name.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct EntityTable {
     entities: HashMap<String, EntityDef>,
 }
@@ -164,14 +164,14 @@ pub(crate) struct AttDecl {
 }
 
 /// Attribute declarations by element name.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct AttlistTable {
     by_element: HashMap<String, ElementAtts>,
 }
 
 /// One element's declared attributes, in declaration order, with an index
 /// by name so lookups stay constant-time however many are declared.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub(crate) struct ElementAtts {
     pub decls: Vec<AttDecl>,
     index: HashMap<String, usize>,

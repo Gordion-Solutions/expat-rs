@@ -18,15 +18,17 @@
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::chars::{is_name_char, Edition};
+use crate::external::EntityContext;
 use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
 
 /// Events produced while handling a token, each with its span.
 pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span)>;
-use crate::expand::{Expander, ExternalLoader};
+use crate::expand::{ExpandSettings, Expander, ExternalLoader};
 use crate::lexer::Lexer;
 use crate::namespaces::Namespaces;
 use crate::token::Token;
@@ -83,12 +85,24 @@ pub(crate) struct State<'l> {
     /// or the internal-subset declaration being processed.
     pub span: Span,
     /// Entities declared by `<!ENTITY ...>` in the DOCTYPE internal subset.
-    entities: EntityTable,
+    pub(crate) entities: Arc<EntityTable>,
     /// Attribute types and defaults from `<!ATTLIST>` declarations.
-    attlists: AttlistTable,
+    pub(crate) attlists: Arc<AttlistTable>,
     pub edition: Edition,
     /// See `Parser::with_libexpat_versions`.
     pub(crate) libexpat_versions: bool,
+    /// Parsing an external parsed entity's content (§4.3.2) rather than a
+    /// document: see `crate::external`.
+    pub(crate) entity_mode: bool,
+    /// Report external entity references for the caller to read
+    /// (`StreamParser::with_external_entity_refs`).
+    pub(crate) external_refs: bool,
+    /// Entities being read around this parser's input (entity mode).
+    pub(crate) open_entities: Vec<String>,
+    /// Stray text before the root whose last run of name characters
+    /// reached the end of its text token, by where the run starts. What
+    /// follows decides the error (see `stray_text`).
+    pending_stray: Option<Position>,
     /// `standalone` from the XML declaration, if given.
     standalone: Option<bool>,
     /// Whether §4.1 WFC Entity Declared applies: no DTD, or only an
@@ -122,10 +136,14 @@ impl<'l> State<'l> {
             saw_doctype: false,
             last_pos: Position::start(),
             span: Span { start: Position::start(), end: Position::start() },
-            entities: EntityTable::new(),
-            attlists: AttlistTable::default(),
+            entities: Arc::new(EntityTable::new()),
+            attlists: Arc::new(AttlistTable::default()),
             edition: Edition::default(),
             libexpat_versions: false,
+            entity_mode: false,
+            external_refs: false,
+            open_entities: Vec::new(),
+            pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
             loader: None,
@@ -155,6 +173,30 @@ impl<'l> State<'l> {
     /// Content where only whitespace, comments and PIs may appear: junk
     /// after the root element, an invalid token before it (as libexpat
     /// classifies them).
+    /// Text other than whitespace before the root, starting at `s[i..]`.
+    /// libexpat reads a run of name characters there as a name: one ended
+    /// by whitespace, the end of input or one of `>?[%)|,*+` is a syntax
+    /// error at its start, one ended by anything else an invalid token at
+    /// that character (as is text that doesn't start with a name
+    /// character). A run reaching the end of this text token is decided by
+    /// what follows, so it is left pending.
+    fn stray_text(&mut self, s: &str, i: usize) -> Result<()> {
+        let run = self.last_pos.advance(&s[..i]);
+        let len = s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
+        let end = run.advance(&s[i..i + len]);
+        let error = |pos, kind| Err(XmlError::NotWellFormed { pos, kind,
+            reason: "non-whitespace text outside the root element".into() });
+        match s[i + len..].chars().next() {
+            _ if len == 0 => error(run, ErrorKind::InvalidToken),
+            None => {
+                self.pending_stray = Some(run);
+                Ok(())
+            }
+            Some(c) if matches!(c, ' ' | '\t' | '\r' | '\n') || ">?[%)|,*+".contains(c) => error(run, ErrorKind::Syntax),
+            Some(_) => error(end, ErrorKind::InvalidToken),
+        }
+    }
+
     /// Whether parsing is still before the root element.
     pub(crate) fn before_root(&self) -> bool {
         self.phase == Phase::Prolog
@@ -166,15 +208,64 @@ impl<'l> State<'l> {
     }
 
     fn expander(&mut self) -> Expander<'_, 'l> {
+        let external = self.external_refs.then(|| self.entity_context(String::new()));
+        let settings = ExpandSettings {
+            limits: self.expansion_limits,
+            edition: self.edition,
+            entity_declared_wfc: self.entity_declared_wfc,
+        };
         Expander::new(
             &self.entities,
             &self.attlists,
-            self.expansion_limits,
-            self.edition,
-            self.entity_declared_wfc,
+            settings,
             self.loader.as_deref_mut(),
             self.last_pos,
+            external,
         )
+    }
+
+    /// The context a parser for external entity `name` needs from here
+    /// (namespace declarations are added on the way out, see `Namespaces`).
+    pub(crate) fn entity_context(&self, name: String) -> EntityContext {
+        EntityContext {
+            name,
+            entities: Arc::clone(&self.entities),
+            attlists: Arc::clone(&self.attlists),
+            edition: self.edition,
+            libexpat_versions: self.libexpat_versions,
+            entity_declared_wfc: self.entity_declared_wfc,
+            expansion_limits: self.expansion_limits,
+            amplification: self.amplification,
+            namespaces: None,
+            open: self.open_entities.clone(),
+        }
+    }
+
+    /// Set up to parse the content of the external entity `context` is for.
+    pub(crate) fn enter_entity(&mut self, context: &EntityContext) {
+        self.entities = Arc::clone(&context.entities);
+        self.attlists = Arc::clone(&context.attlists);
+        self.set_edition(context.edition);
+        self.libexpat_versions = context.libexpat_versions;
+        self.entity_declared_wfc = context.entity_declared_wfc;
+        self.expansion_limits = context.expansion_limits;
+        self.amplification = context.amplification;
+        if let Some(bindings) = &context.namespaces {
+            self.enable_namespaces();
+            if let Some(ns) = &mut self.namespaces {
+                ns.preset(bindings);
+            }
+        }
+        self.open_entities = context.open.clone();
+        self.entity_mode = true;
+        self.external_refs = true;
+        self.phase = Phase::Body;
+    }
+
+    /// Character data, references and CDATA are content here: inside an
+    /// element, or anywhere in an external entity's content.
+    fn in_content(&self) -> bool {
+        !self.stack.is_empty() || self.entity_mode
     }
 
     /// Deliver an event, through namespace processing if it is enabled.
@@ -224,7 +315,7 @@ impl<'l> State<'l> {
     /// Act on the internal subset's declarations in document order (§5.1),
     /// delivering the events for what it contained.
     fn process_dtd<'t>(&mut self, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
-        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef));
+        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef(_)));
         self.entity_declared_wfc = self.standalone == Some(true)
             || (!dtd.external_subset && !has_pe_refs);
         // Parameter entities are not read yet, so per §5.1 entity and
@@ -235,7 +326,10 @@ impl<'l> State<'l> {
         for (decl, (start, end)) in dtd.decls.into_iter().zip(dtd.spans) {
             self.span = Span { start, end };
             match decl {
-                DtdDecl::PeRef => after_unread_pe = true,
+                DtdDecl::PeRef(name) => {
+                    after_unread_pe = true;
+                    self.emit(Event::ParameterEntityRef(Cow::Owned(name)), out)?;
+                }
                 DtdDecl::Pi { target, body } => {
                     let body = normalize_newlines(&body).into_owned();
                     self.emit(Event::ProcessingInstruction { target: Cow::Owned(target), body: Cow::Owned(body) }, out)?;
@@ -271,7 +365,7 @@ impl<'l> State<'l> {
                         },
                     };
                     if !parameter {
-                        self.entities.declare_def(name, def);
+                        Arc::make_mut(&mut self.entities).declare_def(name, def);
                     }
                     self.emit(event, out)?;
                 }
@@ -294,7 +388,7 @@ impl<'l> State<'l> {
                         default: default.clone().map(Cow::Owned),
                         required,
                     }, out)?;
-                    self.attlists.declare(element, AttDecl { name, cdata, default });
+                    Arc::make_mut(&mut self.attlists).declare(element, AttDecl { name, cdata, default });
                 }
             }
         }
@@ -304,6 +398,19 @@ impl<'l> State<'l> {
 
     /// End of input: everything opened must have closed.
     pub fn finish(&self) -> Result<()> {
+        if self.entity_mode {
+            // An entity's content closes what it opens (§4.3.2); libexpat
+            // calls this an asynchronous entity.
+            return match self.stack.top() {
+                Some(open) => Err(self.not_wf(ErrorKind::AsyncEntity, format!("entity ends inside element {open:?}"))),
+                None => Ok(()),
+            };
+        }
+        if let Some(run) = self.pending_stray {
+            // The run of name characters ended the input.
+            return Err(XmlError::NotWellFormed { pos: run, kind: ErrorKind::Syntax,
+                reason: "non-whitespace text outside the root element".into() });
+        }
         if let Some(open) = self.stack.top() {
             return Err(self.not_wf(ErrorKind::NoElements, format!("unclosed element {open:?}")));
         }
@@ -322,7 +429,7 @@ impl<'l> State<'l> {
 
     fn close_element(&mut self) {
         self.stack.pop();
-        if self.stack.is_empty() {
+        if self.stack.is_empty() && !self.entity_mode {
             self.phase = Phase::Epilog;
         }
     }
@@ -330,7 +437,25 @@ impl<'l> State<'l> {
     /// Handle one token, delivering its events to `out`. `dtd` holds the
     /// declarations the lexer recorded while tokenising a DOCTYPE token.
     pub fn handle<'t>(&mut self, tok: Token<'t>, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
+        if self.pending_stray.is_some() {
+            // The run of name characters was followed by markup ('<' or
+            // '&'), reported where that starts: where this token starts.
+            return Err(XmlError::NotWellFormed { pos: self.last_pos, kind: ErrorKind::InvalidToken,
+                reason: "non-whitespace text outside the root element".into() });
+        }
         match tok {
+            Token::XmlDecl(d) if self.entity_mode => {
+                // A text declaration (§4.3.1): the encoding is required,
+                // standalone isn't allowed.
+                if d.encoding.is_none() || d.standalone.is_some() {
+                    return Err(self.not_wf(ErrorKind::TextDecl,
+                        "a text declaration needs an encoding and may not have standalone"));
+                }
+                self.emit(Event::XmlDecl(d), out)
+            }
+            Token::Doctype { .. } if self.entity_mode => {
+                Err(self.not_wf(ErrorKind::InvalidToken, "DOCTYPE not allowed in an external entity"))
+            }
             Token::XmlDecl(d) => {
                 if self.saw_xmldecl {
                     return Err(self.not_wf(ErrorKind::MisplacedXmlPi, "duplicate XML declaration"));
@@ -395,16 +520,14 @@ impl<'l> State<'l> {
             }
             Token::Text(s) => {
                 // Per §2.1: character data only inside the root element.
-                if self.stack.is_empty() {
-                    if let Some(mut i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
-                        // Report the first character that isn't whitespace;
-                        // before the root, the first after a run of name
-                        // characters there (libexpat reads one as a name).
-                        if self.phase != Phase::Epilog {
-                            i += s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
+                if !self.in_content() {
+                    if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
+                        if self.phase == Phase::Epilog {
+                            // Report the first character that isn't whitespace.
+                            self.last_pos = self.last_pos.advance(&s[..i]);
+                            return Err(self.outside_root("non-whitespace text outside the root element"));
                         }
-                        self.last_pos = self.last_pos.advance(&s[..i]);
-                        return Err(self.outside_root("non-whitespace text outside the root element"));
+                        return self.stray_text(s, i);
                     }
                     // Whitespace in the prolog/epilog is silently absorbed.
                     return Ok(());
@@ -412,7 +535,7 @@ impl<'l> State<'l> {
                 self.emit(Event::Text(normalize_newlines(s)), out)
             }
             Token::CData(s) => {
-                if self.stack.is_empty() {
+                if !self.in_content() {
                     return Err(self.outside_root("CDATA section outside the root element"));
                 }
                 self.emit(Event::CData(normalize_newlines(s)), out)
@@ -425,7 +548,7 @@ impl<'l> State<'l> {
             // Replacement text is checked, budgeted against billion-laughs /
             // quadratic-blowup, and its events delivered in place.
             Token::EntityRef(name) => {
-                if self.stack.is_empty() {
+                if !self.in_content() {
                     return Err(self.not_wf(ErrorKind::InvalidToken, "entity reference outside the root element"));
                 }
                 if let Some(text) = crate::entities::builtin_entity(name) {
@@ -438,7 +561,7 @@ impl<'l> State<'l> {
                 events.into_iter().try_for_each(|e| self.emit(e, out))
             }
             Token::CharRef(c) => {
-                if self.stack.is_empty() {
+                if !self.in_content() {
                     return Err(self.not_wf(ErrorKind::InvalidToken, "character reference outside the root element"));
                 }
                 self.emit(Event::Text(Cow::Owned(c.to_string())), out)
