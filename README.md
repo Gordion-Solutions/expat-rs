@@ -10,7 +10,9 @@ memory-safety bugs.
 
 Project page: <https://gordionsolutions.co.uk/software/#expat-rs>
 
-> **Status:** early development. Well-formedness checking, DOCTYPE /
+> **Status:** released, 0.2.0 on
+> [crates.io](https://crates.io/crates/expat-rs); in active development.
+> Shipped: well-formedness checking, DOCTYPE /
 > internal-subset handling, entity expansion with billion-laughs /
 > quadratic-blowup defences, opt-in external entity loading, UTF-8 /
 > UTF-16 / ASCII / Latin-1 decoding, and events carrying the document's
