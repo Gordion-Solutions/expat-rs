@@ -60,3 +60,8 @@ fn check_probe(name: &str) {
 fn abi_probe_matches_libexpat() {
     check_probe("abi_probe");
 }
+
+#[test]
+fn positions_match_libexpat() {
+    check_probe("positions");
+}

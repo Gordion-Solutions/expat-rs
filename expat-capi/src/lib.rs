@@ -247,6 +247,10 @@ pub struct Shim {
     /// Where the token being delivered ends: parsing stopped by
     /// `XML_StopParser` reports this position, as libexpat does.
     token_end: Cell<Position>,
+    /// The root element hasn't started: parsing stopped by `XML_StopParser`
+    /// before it (in the prolog, the DOCTYPE included) reports the position
+    /// the handler was given, not `token_end`, as libexpat does.
+    before_root: Cell<bool>,
     /// Stopped during the start of an empty element (`<e/>`): its end is
     /// still delivered, since libexpat finishes the token first.
     stop_in_empty_tag: Cell<bool>,
@@ -342,6 +346,7 @@ impl Shim {
             stop_requested: Cell::new(false),
             current_span: Cell::new(None),
             token_end: Cell::new(Position::start()),
+            before_root: Cell::new(true),
             stop_in_empty_tag: Cell::new(false),
             parser_as_arg: Cell::new(false),
             current_raw: RefCell::new(String::new()),
@@ -488,8 +493,10 @@ impl Shim {
         let error_input = result.as_ref().err().map(|e| parser.input_offset(e.position()));
         drop(core);
         if self.stop_requested.get() {
-            self.pos.set(self.token_end.get());
-            self.input_pos.set(self.input_end.get());
+            if !(matches!(self.role, Role::Root) && self.before_root.get()) {
+                self.pos.set(self.token_end.get());
+                self.input_pos.set(self.input_end.get());
+            }
             self.error.set(self.stop_error.get());
             self.status.set(Status::Failed);
             return XML_STATUS_ERROR;
@@ -640,6 +647,67 @@ fn doctype_header_len(raw: &str) -> usize {
         }
     }
     raw.len()
+}
+
+/// Where libexpat reports a DTD event's position, as a byte offset into
+/// its source text: at the token that completes what the handler is told.
+/// The DOCTYPE starts at its `[` or closing `>`, and ends at the closing
+/// `>`; an internal entity at its value, an unparsed one at its notation's
+/// name, an external one at the closing `>`; a notation at its system
+/// literal, or the closing `>` without one; an element declaration at the
+/// last token of its content model; each attribute of an ATTLIST at its
+/// default (`#IMPLIED`, `#REQUIRED` or the value). `None` for other events,
+/// which libexpat reports where they start. (Found by black-box tests of
+/// libexpat 2.8.2.)
+fn decl_trigger(event: &Event<'_>, raw: &str) -> Option<usize> {
+    match event {
+        Event::Doctype { .. } => return doctype_header_len(raw).checked_sub(1),
+        Event::EndDoctype => return raw.ends_with('>').then(|| raw.len() - 1),
+        Event::EntityDecl { .. } | Event::NotationDecl { .. } | Event::ElementDecl { .. } | Event::AttlistDecl { .. } => {}
+        _ => return None,
+    }
+    let tokens: Vec<&str> = dtd_tokens(raw).into_iter().filter(|t| !t.starts_with([' ', '\t', '\r', '\n'])).collect();
+    let (&close, body) = tokens.split_last().filter(|(close, _)| **close == ">")?;
+    let last = body.last().copied();
+    let token = match event {
+        Event::EntityDecl { system_id: Some(_), notation: None, .. } => close,
+        Event::EntityDecl { .. } | Event::ElementDecl { .. } => last?,
+        Event::NotationDecl { system_id, .. } => if system_id.is_some() { last? } else { close },
+        Event::AttlistDecl { attribute, .. } => attlist_default(body, attribute)?,
+        _ => return None,
+    };
+    Some(token.as_ptr() as usize - raw.as_ptr() as usize)
+}
+
+/// The default of `attribute` in an ATTLIST's tokens (whitespace dropped,
+/// `>` excluded): after `<!ATTLIST` and the element's name, each definition
+/// is a name, a type (a keyword, an enumeration in parentheses, or
+/// `NOTATION` and one), then `#IMPLIED`, `#REQUIRED`, or a value with or
+/// without `#FIXED`. The first definition of the name, as libexpat keeps.
+fn attlist_default<'a>(tokens: &[&'a str], attribute: &str) -> Option<&'a str> {
+    let mut i = 2;
+    while i < tokens.len() {
+        let name = tokens[i];
+        i += 1;
+        if tokens.get(i).is_some_and(|t| t.eq_ignore_ascii_case("NOTATION")) {
+            i += 1;
+        }
+        if tokens.get(i) == Some(&"(") {
+            while !tokens.get(i)?.starts_with(')') {
+                i += 1;
+            }
+        }
+        i += 1;
+        if tokens.get(i) == Some(&"#FIXED") {
+            i += 1;
+        }
+        let default = *tokens.get(i)?;
+        i += 1;
+        if name == attribute {
+            return Some(default);
+        }
+    }
+    None
 }
 
 /// Split DTD markup into the tokens libexpat gives its default handler:
@@ -816,11 +884,17 @@ impl Shim {
 
     /// Deliver one expat-rs event as libexpat callbacks.
     fn dispatch(&self, l: Located<'_>) {
-        self.pos.set(l.span.start);
+        // A declaration's handlers are told where the token completing it
+        // is, not where it starts.
+        let at = decl_trigger(&l.event, l.raw).unwrap_or(0);
+        self.pos.set(l.span.start.advance(&l.raw[..at]));
         self.current_span.set(Some(l.span));
         self.token_end.set(l.span.end);
-        self.input_pos.set(l.input_start);
+        self.input_pos.set(l.input_start + self.input_len(&l.raw[..at]));
         self.input_end.set(l.input_start + self.input_len(l.raw));
+        if matches!(l.event, Event::StartElement { .. }) {
+            self.before_root.set(false);
+        }
         if self.handlers.default.get().is_some() {
             if let Ok(mut raw) = self.current_raw.try_borrow_mut() {
                 raw.clear();
