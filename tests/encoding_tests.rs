@@ -127,9 +127,18 @@ fn forced_encoding_overrides_the_declaration() {
 }
 
 #[test]
-fn forced_utf16_without_bom_is_big_endian() {
+fn forced_utf16_without_bom_takes_the_byte_order_from_the_first_character() {
     let doc: Vec<u8> = "<p>€</p>".encode_utf16().flat_map(u16::to_be_bytes).collect();
     assert_eq!(stream_text(&doc, 3, StreamParser::new().with_encoding("UTF-16")).unwrap(), "€");
     let le: Vec<u8> = "<p>€</p>".encode_utf16().flat_map(u16::to_le_bytes).collect();
     assert_eq!(stream_text(&le, 3, StreamParser::new().with_encoding("UTF-16LE")).unwrap(), "€");
+    // How Java strings reach libexpat on Android: UTF-16 in little-endian
+    // byte order, no byte order mark, a declaration naming another
+    // encoding, the parser told "UTF-16".
+    let java: Vec<u8> = "<?xml version='1.0' encoding='UTF-8'?>\n<p>€</p>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    for chunk in [2, 3, 6] {
+        assert_eq!(stream_text(&java, chunk, StreamParser::new().with_encoding("UTF-16")).unwrap(), "€", "pieces of {chunk}");
+    }
+    let space_first: Vec<u8> = " <p>€</p>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    assert_eq!(stream_text(&space_first, 4, StreamParser::new().with_encoding("UTF-16")).unwrap(), "€", "whitespace first");
 }

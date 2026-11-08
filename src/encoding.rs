@@ -380,7 +380,10 @@ impl StreamDecoder {
                 "ISO-8859-1" | "ISO_8859-1" | "LATIN1" => Kind::Bit8(Kind8::Latin1),
                 "UTF-16LE" => utf16(false),
                 "UTF-16BE" => utf16(true),
-                "UTF-16" => utf16(!p.starts_with(&[0xFF, 0xFE])),
+                // Byte order from a byte order mark, else from where the
+                // zero byte of the first (ASCII) character is, else big
+                // endian, as libexpat decides it.
+                "UTF-16" => utf16(!(p.starts_with(&[0xFF, 0xFE]) || matches!(p, [b, 0x00, ..] if *b != 0))),
                 _ => resolve(&forced, Position::start(), unknown)?,
             }));
         }
