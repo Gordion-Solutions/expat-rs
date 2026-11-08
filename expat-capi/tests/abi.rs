@@ -70,3 +70,8 @@ fn positions_match_libexpat() {
 fn cdata_in_pieces_matches_libexpat() {
     check_probe("cdata");
 }
+
+#[test]
+fn android_consumers_match_libexpat() {
+    check_probe("android_consumers");
+}

@@ -1,0 +1,672 @@
+== libcore: namespaces, triplets, DTD declarations, an external entity
+  doctype r sys=(null) pub=(null) internal=1 @2:12
+  notation gif base=(null) sys=image/gif pub=(null)
+  unparsed pic base=(null) sys=pic.gif pub=(null) notation=gif
+  end-doctype @7:1
+  start-ns (null)=urn:d @8:0
+  start-ns a=urn:a @8:0
+  start urn:d|r [urn:a|k|a=v] [plain=p] @8:0
+  text [\n] @8:51
+  text [  ] @9:0
+  pi target [some data] @9:2
+  text [\n] @9:22
+  text [  ] @10:0
+  comment [ a comment ] @10:2
+  text [\n] @10:20
+  text [  ] @11:0
+  start urn:a|x|a @11:2
+  text [te] @11:7
+  text [xt ] @11:9
+  text [internal] @11:12
+  text [ more] @11:17
+  end urn:a|x|a @11:22
+  text [\n] @11:28
+  text [ ] @12:0
+  text [ ] @12:1
+  start-cdata @12:2
+  text [<raw] @12:11
+  text [> & stu] @12:15
+  text [ff] @12:22
+  end-cdata @12:24
+  text [\n] @12:27
+  text [ ] @13:0
+  text [ ] @13:1
+  external-entity sys=ext.xml pub=(null) base=(null) user-data=kept @13:2
+  entity parser: user-data=inherited
+  start urn:a|e|a [q=w] @1:38
+  text [in ] @1:49
+  text [internal] @1:52
+  text [ en] @1:57
+  text [tity] @1:60
+  end urn:a|e|a @1:64
+  text [tail] @1:70
+  -> ok
+  text [\n] @13:7
+  text [  ] @14:0
+  start urn:d|y [urn:a|z|a=1] @14:2
+  end urn:d|y @14:14
+  text [\n] @14:14
+  end urn:d|r @15:0
+  end-ns a @15:0
+  end-ns (null) @15:0
+  -> ok
+== libcore: without namespaces
+  doctype r sys=(null) pub=(null) internal=1 @2:12
+  notation gif base=(null) sys=image/gif pub=(null)
+  unparsed pic base=(null) sys=pic.gif pub=(null) notation=gif
+  end-doctype @7:1
+  start r [xmlns=urn:d] [xmlns:a=urn:a] [a:k=v] [plain=p] @8:0
+  text [\n] @8:51
+  text [  ] @9:0
+  pi target [some data] @9:2
+  text [\n] @9:22
+  text [  ] @10:0
+  comment [ a comment ] @10:2
+  text [\n] @10:20
+  text [  ] @11:0
+  start a:x @11:2
+  text [text ] @11:7
+  text [internal] @11:12
+  text [ more] @11:17
+  end a:x @11:22
+  text [\n] @11:28
+  text [  ] @12:0
+  start-cdata @12:2
+  text [<raw> & stuff] @12:11
+  end-cdata @12:24
+  text [\n] @12:27
+  text [  ] @13:0
+  external-entity sys=ext.xml pub=(null) base=(null) user-data=kept @13:2
+  entity parser: user-data=inherited
+  start a:e [q=w] @1:38
+  text [in ] @1:49
+  text [internal] @1:52
+  text [ en] @1:57
+  text [tity] @1:60
+  end a:e @1:64
+  text [tail] @1:70
+  -> ok
+  text [\n] @13:7
+  text [  ] @14:0
+  start y [a:z=1] @14:2
+  end y @14:14
+  text [\n] @14:14
+  end r @15:0
+  -> ok
+== libcore: the entity handler reports failure
+  doctype r sys=(null) pub=(null) internal=1 @2:12
+  notation gif base=(null) sys=image/gif pub=(null)
+  unparsed pic base=(null) sys=pic.gif pub=(null) notation=gif
+  end-doctype @7:1
+  start-ns (null)=urn:d @8:0
+  start-ns a=urn:a @8:0
+  start urn:d|r [urn:a|k|a=v] [plain=p] @8:0
+  text [\n] @8:51
+  text [  ] @9:0
+  pi target [some data] @9:2
+  text [\n] @9:22
+  text [  ] @10:0
+  comment [ a comment ] @10:2
+  text [\n] @10:20
+  text [  ] @11:0
+  start urn:a|x|a @11:2
+  text [text ] @11:7
+  text [internal] @11:12
+  text [ more] @11:17
+  end urn:a|x|a @11:22
+  text [\n] @11:28
+  text [  ] @12:0
+  start-cdata @12:2
+  text [<raw> & stuff] @12:11
+  end-cdata @12:24
+  text [\n] @12:27
+  text [  ] @13:0
+  external-entity sys=ext.xml pub=(null) base=(null) user-data=kept @13:2
+  -> error 21 (error in processing external entity reference) @13:2
+== libcore: a malformed entity
+  doctype r sys=(null) pub=(null) internal=1 @2:12
+  notation gif base=(null) sys=image/gif pub=(null)
+  unparsed pic base=(null) sys=pic.gif pub=(null) notation=gif
+  end-doctype @7:1
+  start-ns (null)=urn:d @8:0
+  start-ns a=urn:a @8:0
+  start urn:d|r [urn:a|k|a=v] [plain=p] @8:0
+  text [\n] @8:51
+  text [  ] @9:0
+  pi target [some data] @9:2
+  text [\n] @9:22
+  text [  ] @10:0
+  comment [ a comment ] @10:2
+  text [\n] @10:20
+  text [  ] @11:0
+  start urn:a|x|a @11:2
+  text [text ] @11:7
+  text [internal] @11:12
+  text [ more] @11:17
+  end urn:a|x|a @11:22
+  text [\n] @11:28
+  text [  ] @12:0
+  start-cdata @12:2
+  text [<raw> & stuff] @12:11
+  end-cdata @12:24
+  text [\n] @12:27
+  text [  ] @13:0
+  external-entity sys=ext.xml pub=(null) base=(null) user-data=kept @13:2
+  entity parser: user-data=inherited
+  start urn:a|e|a @1:0
+  text [unclo] @1:5
+  text [sed] @1:10
+  -> error 13 (asynchronous entity) @1:13
+  text [\n] @13:7
+  text [  ] @14:0
+  start urn:d|y [urn:a|z|a=1] @14:2
+  end urn:d|y @14:14
+  text [\n] @14:14
+  end urn:d|r @15:0
+  end-ns a @15:0
+  end-ns (null) @15:0
+  -> ok
+== libcore: malformed documents
+  start r @1:0
+  start a @1:3
+  -> error 7 (mismatched tag) @1:8
+  -> error 8 (duplicate attribute) @1:9
+  start r @1:0
+  -> error 11 (undefined entity) @1:3
+  start r @1:0
+  end r @1:4
+  -> error 9 (junk after document element) @1:4
+  start r @1:0
+  text [\n] @1:3
+  text [  ] @2:0
+  -> error 27 (unbound prefix) @2:2
+  start r @1:21
+  -> error 4 (not well-formed (invalid token)) @1:24
+  -> error 3 (no element found) @1:0
+== libcore: Java chars as UTF-16LE without a BOM, namespaces off, document 1
+  start a [b=é] @2:0
+  text [x€y] @2:9
+  text [ 😀] @2:12
+  end a @2:14
+  -> ok
+== libcore: Java chars as UTF-16LE without a BOM, namespaces off, document 2
+  start a [xmlns:p=urn:p] @1:0
+  start p:b [c=d] @1:19
+  text [plain] @1:30
+  end p:b @1:35
+  end a @1:41
+  -> ok
+== libcore: Java chars as UTF-16LE without a BOM, namespaces off, document 3
+  start a @1:43
+  text [ét] @1:46
+  text [é] @1:48
+  end a @1:49
+  -> ok
+== libcore: Java chars as UTF-16LE without a BOM, namespaces on, document 1
+  start a [b=é] @2:0
+  text [x€y] @2:9
+  text [ 😀] @2:12
+  end a @2:14
+  -> ok
+== libcore: Java chars as UTF-16LE without a BOM, namespaces on, document 2
+  start-ns p=urn:p @1:0
+  start a @1:0
+  start urn:p|b|p [c=d] @1:19
+  text [plain] @1:30
+  end urn:p|b|p @1:35
+  end a @1:41
+  end-ns p @1:41
+  -> ok
+== libcore: Java chars as UTF-16LE without a BOM, namespaces on, document 3
+  start a @1:43
+  text [ét] @1:46
+  text [é] @1:48
+  end a @1:49
+  -> ok
+== Skia SkXMLParser: a stream in memory, XML_Parse
+  start svg [xmlns=http://www.w3.org/2000/svg] [width=24] [height=24] [viewBox=0 0 24 24] @2:0
+  text [\n] @2:83
+  text [  ] @3:0
+  start title @3:2
+  text [Icon ] @3:9
+  text [&] @3:14
+  text [ label] @3:19
+  end title @3:25
+  text [\n] @3:33
+  text [  ] @4:0
+  start path [d=M12 2L2 7l10 5 10-5-10-5z] [fill=#000] @4:2
+  end path @4:51
+  text [\n] @4:51
+  text [  ] @5:0
+  start text [x=1] [y=2] @5:2
+  text [café ] @5:20
+  text [☺] @5:25
+  end text @5:33
+  text [\n] @5:40
+  end svg @6:0
+  -> ok
+== Skia SkXMLParser: a stream, XML_GetBuffer and XML_ParseBuffer
+  start svg [xmlns=http://www.w3.org/2000/svg] [width=24] [height=24] [viewBox=0 0 24 24] @2:0
+  text [\n] @2:83
+  text [  ] @3:0
+  start title @3:2
+  text [Icon ] @3:9
+  text [&] @3:14
+  text [ label] @3:19
+  end title @3:25
+  text [\n] @3:33
+  text [  ] @4:0
+  start path [d=M12 2L2 7l10 5 10-5-10-5z] [fill=#000] @4:2
+  end path @4:51
+  text [\n] @4:51
+  text [  ] @5:0
+  start text [x=1] [y=2] @5:2
+  text [café ] @5:20
+  text [☺] @5:25
+  end text @5:33
+  text [\n] @5:40
+  end svg @6:0
+  -> ok
+== Skia SkXMLParser: entity declarations refused, document 1
+  entity-decl a pe=0, stopping @1:26
+  -> error 35 (parsing aborted) @1:26
+  entity-decl a pe=0, stopping @1:26
+  -> error 35 (parsing aborted) @1:26
+== Skia SkXMLParser: entity declarations refused, document 2
+  entity-decl lol pe=0, stopping @3:14
+  -> error 35 (parsing aborted) @3:14
+  entity-decl lol pe=0, stopping @3:14
+  -> error 35 (parsing aborted) @3:14
+== Skia SkXMLParser: entity declarations refused, document 3
+  entity-decl pe pe=1, stopping @1:29
+  -> error 35 (parsing aborted) @1:29
+  entity-decl pe pe=1, stopping @1:29
+  -> error 35 (parsing aborted) @1:29
+== Skia font configuration, 512-byte buffers
+  start familyset [version=23] @2:0
+  start family [name=sans-serif] @4:4
+  start font [weight=100] [style=normal] @5:8
+  font-text [Roboto-Regular.ttf] @5:42
+  font-text [\n] @5:60
+  font-text [          ] @6:0
+  start axis [tag=ital] [stylevalue=0] @6:10
+  end axis @6:44
+  start axis [tag=wdth] [stylevalue=100] @7:10
+  end axis @7:46
+  end font @8:8
+  start font [weight=400] [style=italic] [index=1] @9:8
+  font-text [Roboto-Italic.ttf] @9:52
+  end font @9:69
+  end family @10:4
+  start alias [name=arial] [to=sans-serif] @11:4
+  end alias @11:42
+  start family [lang=und-Arab] [variant=elegant] @12:4
+  start font [weight=400] [style=normal] [postScriptName=NotoNaskhArabic] @13:8
+  font-text [NotoNaskhArabic-Regular.ttf] @13:75
+  end font @13:102
+  end family @14:4
+  end familyset @15:0
+  -> ok
+== Skia font configuration, 5-byte buffers
+  start familyset [version=23] @2:0
+  start family [name=sans-serif] @4:4
+  start font [weight=100] [style=normal] @5:8
+  font-text [Rob] @5:42
+  font-text [oto-R] @5:45
+  font-text [egula] @5:50
+  font-text [r.ttf] @5:55
+  font-text [\n] @5:60
+  font-text [    ] @6:0
+  font-text [     ] @6:4
+  font-text [ ] @6:9
+  start axis [tag=ital] [stylevalue=0] @6:10
+  end axis @6:44
+  start axis [tag=wdth] [stylevalue=100] @7:10
+  end axis @7:46
+  end font @8:8
+  start font [weight=400] [style=italic] [index=1] @9:8
+  font-text [Roboto-Italic.ttf] @9:52
+  end font @9:69
+  end family @10:4
+  start alias [name=arial] [to=sans-serif] @11:4
+  end alias @11:42
+  start family [lang=und-Arab] [variant=elegant] @12:4
+  start font [weight=400] [style=normal] [postScriptName=NotoNaskhArabic] @13:8
+  font-text [NotoN] @13:75
+  font-text [askhA] @13:80
+  font-text [rabic] @13:85
+  font-text [-Regu] @13:90
+  font-text [lar.t] @13:95
+  font-text [tf] @13:100
+  end font @13:102
+  end family @14:4
+  end familyset @15:0
+  -> ok
+== Skia font configuration with an entity declaration
+  entity-decl x pe=0, stopping @2:32
+  -> error 35 (parsing aborted) @2:32
+== MediaProfiles: start handler only, 512-byte buffers
+  start MediaSettings @4:0
+  start CamcorderProfiles [cameraId=0] @5:4
+  start EncoderProfile [quality=high] [fileFormat=mp4] [duration=30] @6:8
+  start Video [codec=h264] [bitRate=12000000] [width=1920] [height=1080] [frameRate=30] @7:12
+  start Audio [codec=aac] [bitRate=96000] [sampleRate=48000] [channels=1] @8:12
+  start EncoderProfile [quality=low] [fileFormat=3gp] [duration=30] @10:8
+  start Video [codec=m4v] [bitRate=192000] [width=176] [height=144] [frameRate=30] @11:12
+  start Audio [codec=amrnb] [bitRate=12200] [sampleRate=8000] [channels=1] @12:12
+  start ImageEncoding [quality=95] @14:8
+  start ImageDecoding [memCap=20000000] @15:8
+  start EncoderOutputFileFormat [name=3gp] @17:4
+  start EncoderOutputFileFormat [name=mp4] @18:4
+  start VideoEncoderCap [name=h264] [enabled=true] [minBitRate=64000] [maxBitRate=40000000] [minFrameWidth=176] [maxFrameWidth=3840] [minFrameHeight=144] [maxFrameHeight=2160] [minFrameRate=15] [maxFrameRate=60] @19:4
+  start AudioDecoderCap [name=wma] [enabled=false] @22:4
+  -> ok
+== MediaCodecsXmlParser: an included file parsed from inside a handler
+  start MediaCodecs @2:0
+  start Settings @3:4
+  start Variant [name=slow-cpu] [enabled=false] @4:8
+  end Variant @4:51
+  start Setting [name=max-video-encoder-input-buffers] [value=12] @5:8
+  end Setting @5:69
+  end Settings @6:4
+  start Decoders @7:4
+  start MediaCodec [name=c2.android.avc.decoder] [type=video/avc] [variant=!slow-cpu] @8:8
+  start Alias [name=OMX.google.h264.decoder] @9:12
+  end Alias @9:52
+  start Limit [name=size] [min=2x2] [max=4080x4080] @10:12
+  end Limit @10:59
+  start Limit [name=alignment] [value=2x2] @11:12
+  end Limit @11:50
+  start Feature [name=adaptive-playback] @12:12
+  end Feature @12:48
+  end MediaCodec @13:8
+  start Include [href=media_codecs_extra.xml] @14:8
+  including media_codecs_extra.xml
+  start Included @1:0
+  start MediaCodec [name=c2.android.opus.decoder] [type=audio/opus] @2:4
+  start Limit [name=channel-count] [max=8] @3:8
+  end Limit @3:46
+  end MediaCodec @4:4
+  end Included @5:0
+  -> ok
+  back in the including file @14:8
+  end Include @14:49
+  end Decoders @15:4
+  start Encoders @16:4
+  start MediaCodec [name=c2.android.aac.encoder] [type=audio/mp4a-latm] @17:8
+  start Limit [name=bitrate] [range=8000-960000] @18:12
+  end Limit @18:56
+  end MediaCodec @19:8
+  end Encoders @20:4
+  end MediaCodecs @21:0
+  -> ok
+== MediaCodecsXmlParser: malformed
+  start MediaCodecs @1:0
+  start Decoders @2:2
+  start MediaCodec [name=x] @3:4
+  malformed (mismatched tag)
+  -> error 7 (mismatched tag) @4:4
+== MediaCodecsXmlParser: empty file
+  malformed (no element found)
+  -> error 3 (no element found) @1:0
+== audio_route: mixer paths, 1024-byte buffers
+  start mixer @1:0
+  start ctl [name=RX1 MIX1 INP1] [value=RX1] @3:4
+  end ctl @3:44
+  start ctl [name=SPK DRV Volume] [value=0] @4:4
+  end ctl @4:43
+  start ctl [name=IIR1 Band1] [id=0] [value=268435456] @5:4
+  end ctl @5:55
+  start path [name=speaker] @6:4
+  start ctl [name=SPK DRV Volume] [value=8] @7:8
+  end ctl @7:47
+  start path [name=speaker-common] @8:8
+  end path @8:38
+  end path @9:4
+  end mixer @10:0
+  -> ok
+== audio_route: malformed
+  start mixer @1:0
+  start ctl [name=a] [value=1] @2:2
+  -> error 7 (mismatched tag) @3:2
+== wayland scanner: a protocol, 4096-byte buffers
+  start protocol [name=wayland] @2:0
+  text [\n] @2:25
+  text [  ] @3:0
+  start copyright @3:2
+  text [\n] @3:13
+  text [    Copyright © 2008-2011 Kristian Høgsberg] @4:0
+  text [\n] @4:43
+  text [  ] @5:0
+  end copyright @5:2
+  text [\n] @5:14
+  text [  ] @6:0
+  start interface [name=wl_display] [version=1] @6:2
+  text [\n] @6:43
+  text [    ] @7:0
+  start description [summary=core global object] @7:4
+  text [\n] @7:46
+  text [\tThe core global object.  This is a special singleton object.  It] @8:0
+  text [\n] @8:65
+  text [\tis used for internal Wayland protocol features.] @9:0
+  text [\n] @9:48
+  text [    ] @10:0
+  end description @10:4
+  text [\n] @10:18
+  text [    ] @11:0
+  start request [name=sync] @11:4
+  text [\n] @11:25
+  text [      ] @12:0
+  start arg [name=callback] [type=new_id] [interface=wl_callback] [summary=callback object for the sync request] @12:6
+  end arg @13:52
+  text [\n] @13:52
+  text [    ] @14:0
+  end request @14:4
+  text [\n] @14:14
+  text [    ] @15:0
+  start enum [name=error] @15:4
+  text [\n] @15:23
+  text [      ] @16:0
+  start entry [name=invalid_object] [value=0] [summary=server couldn't find object] @16:6
+  end entry @16:84
+  text [\n] @16:84
+  text [    ] @17:0
+  end enum @17:4
+  text [\n] @17:11
+  text [  ] @18:0
+  end interface @18:2
+  text [\n] @18:14
+  end protocol @19:0
+  -> ok
+== wayland scanner: malformed
+  start protocol [name=x] @1:0
+  text [\n] @1:19
+  text [  ] @2:0
+  start interface [name=y] [version=1] @2:2
+  text [\n] @2:34
+  -> error 7 (mismatched tag) @3:2
+== aapt2 XmlDom: parser as handler argument, 4096-byte pieces
+ [arg is parser: yes, user-data kept]  comment [ Copyright (C) 2024 ] @2:0
+ [arg is parser: yes, user-data kept]  start-ns android=http://schemas.android.com/apk/res/android @3:0
+ [arg is parser: yes, user-data kept]  start-ns app=http://schemas.android.com/apk/res-auto @3:0
+ [arg is parser: yes, user-data kept]  start LinearLayout [http://schemas.android.com/apk/res/android|layout_width=match_parent] [http://schemas.android.com/apk/res/android|orientation=vertical] @3:0
+ [arg is parser: yes, user-data kept]  text [\n] @6:35
+ [arg is parser: yes, user-data kept]  text [    ] @7:0
+ [arg is parser: yes, user-data kept]  start TextView [http://schemas.android.com/apk/res/android|id=@+id/title] [http://schemas.android.com/apk/res/android|text=@string/title] [http://schemas.android.com/apk/res-auto|custom=1] @7:4
+ [arg is parser: yes, user-data kept]  end TextView @7:84
+ [arg is parser: yes, user-data kept]  text [\n] @7:84
+ [arg is parser: yes, user-data kept]  text [    ] @8:0
+ [arg is parser: yes, user-data kept]  start-ns xliff=urn:oasis:names:tc:xliff:document:1.2 @8:4
+ [arg is parser: yes, user-data kept]  start string [name=greeting] @8:4
+ [arg is parser: yes, user-data kept]  text [Hello, ] @8:80
+ [arg is parser: yes, user-data kept]  start urn:oasis:names:tc:xliff:document:1.2|g [id=name] @8:87
+ [arg is parser: yes, user-data kept]  text [%1$s] @8:106
+ [arg is parser: yes, user-data kept]  end urn:oasis:names:tc:xliff:document:1.2|g @8:110
+ [arg is parser: yes, user-data kept]  text [!] @8:120
+ [arg is parser: yes, user-data kept]  text [\n] @8:121
+ [arg is parser: yes, user-data kept]  text [    Second line ] @9:0
+ [arg is parser: yes, user-data kept]  text [&] @9:16
+ [arg is parser: yes, user-data kept]  text [ more] @9:21
+ [arg is parser: yes, user-data kept]  end string @9:26
+ [arg is parser: yes, user-data kept]  end-ns xliff @9:26
+ [arg is parser: yes, user-data kept]  text [\n] @9:35
+ [arg is parser: yes, user-data kept]  text [    ] @10:0
+ [arg is parser: yes, user-data kept]  start string [name=raw] @10:4
+ [arg is parser: yes, user-data kept]  text [<b>bold</b>] @10:32
+ [arg is parser: yes, user-data kept]  end string @10:46
+ [arg is parser: yes, user-data kept]  text [\n] @10:55
+ [arg is parser: yes, user-data kept]  end LinearLayout @11:0
+ [arg is parser: yes, user-data kept]  end-ns app @11:0
+ [arg is parser: yes, user-data kept]  end-ns android @11:0
+  -> ok
+== aapt2 XmlDom: parser as handler argument, 13-byte pieces
+ [arg is parser: yes, user-data kept]  comment [ Copyright (C) 2024 ] @2:0
+ [arg is parser: yes, user-data kept]  start-ns android=http://schemas.android.com/apk/res/android @3:0
+ [arg is parser: yes, user-data kept]  start-ns app=http://schemas.android.com/apk/res-auto @3:0
+ [arg is parser: yes, user-data kept]  start LinearLayout [http://schemas.android.com/apk/res/android|layout_width=match_parent] [http://schemas.android.com/apk/res/android|orientation=vertical] @3:0
+ [arg is parser: yes, user-data kept]  text [\n] @6:35
+ [arg is parser: yes, user-data kept]  text [    ] @7:0
+ [arg is parser: yes, user-data kept]  start TextView [http://schemas.android.com/apk/res/android|id=@+id/title] [http://schemas.android.com/apk/res/android|text=@string/title] [http://schemas.android.com/apk/res-auto|custom=1] @7:4
+ [arg is parser: yes, user-data kept]  end TextView @7:84
+ [arg is parser: yes, user-data kept]  text [\n] @7:84
+ [arg is parser: yes, user-data kept]  text [    ] @8:0
+ [arg is parser: yes, user-data kept]  start-ns xliff=urn:oasis:names:tc:xliff:document:1.2 @8:4
+ [arg is parser: yes, user-data kept]  start string [name=greeting] @8:4
+ [arg is parser: yes, user-data kept]  text [Hello, ] @8:80
+ [arg is parser: yes, user-data kept]  start urn:oasis:names:tc:xliff:document:1.2|g [id=name] @8:87
+ [arg is parser: yes, user-data kept]  text [%1$s] @8:106
+ [arg is parser: yes, user-data kept]  end urn:oasis:names:tc:xliff:document:1.2|g @8:110
+ [arg is parser: yes, user-data kept]  text [!] @8:120
+ [arg is parser: yes, user-data kept]  text [\n] @8:121
+ [arg is parser: yes, user-data kept]  text [    Second line ] @9:0
+ [arg is parser: yes, user-data kept]  text [&] @9:16
+ [arg is parser: yes, user-data kept]  text [ more] @9:21
+ [arg is parser: yes, user-data kept]  end string @9:26
+ [arg is parser: yes, user-data kept]  end-ns xliff @9:26
+ [arg is parser: yes, user-data kept]  text [\n] @9:35
+ [arg is parser: yes, user-data kept]  text [    ] @10:0
+ [arg is parser: yes, user-data kept]  start string [name=raw] @10:4
+ [arg is parser: yes, user-data kept]  text [<b>bold</b>] @10:32
+ [arg is parser: yes, user-data kept]  end string @10:46
+ [arg is parser: yes, user-data kept]  text [\n] @10:55
+ [arg is parser: yes, user-data kept]  end LinearLayout @11:0
+ [arg is parser: yes, user-data kept]  end-ns app @11:0
+ [arg is parser: yes, user-data kept]  end-ns android @11:0
+  -> ok
+== aapt2 XmlPullParser: 4096-byte pieces, the last final
+  comment [ Copyright (C) 2024 ] @2:0
+  start-ns android=http://schemas.android.com/apk/res/android @3:0
+  start-ns app=http://schemas.android.com/apk/res-auto @3:0
+  start LinearLayout [http://schemas.android.com/apk/res/android|layout_width=match_parent] [http://schemas.android.com/apk/res/android|orientation=vertical] @3:0
+  text [\n] @6:35
+  text [    ] @7:0
+  start TextView [http://schemas.android.com/apk/res/android|id=@+id/title] [http://schemas.android.com/apk/res/android|text=@string/title] [http://schemas.android.com/apk/res-auto|custom=1] @7:4
+  end TextView @7:84
+  text [\n] @7:84
+  text [    ] @8:0
+  start-ns xliff=urn:oasis:names:tc:xliff:document:1.2 @8:4
+  start string [name=greeting] @8:4
+  text [Hello, ] @8:80
+  start urn:oasis:names:tc:xliff:document:1.2|g [id=name] @8:87
+  text [%1$s] @8:106
+  end urn:oasis:names:tc:xliff:document:1.2|g @8:110
+  text [!] @8:120
+  text [\n] @8:121
+  text [    Second line ] @9:0
+  text [&] @9:16
+  text [ more] @9:21
+  end string @9:26
+  end-ns xliff @9:26
+  text [\n] @9:35
+  text [    ] @10:0
+  start string [name=raw] @10:4
+  start-cdata @10:23
+  text [<b>bold</b>] @10:32
+  end-cdata @10:43
+  end string @10:46
+  text [\n] @10:55
+  end LinearLayout @11:0
+  end-ns app @11:0
+  end-ns android @11:0
+  -> ok
+== aapt2 XmlPullParser: 13-byte pieces, the last final
+  comment [ Copyright (C) 2024 ] @2:0
+  start-ns android=http://schemas.android.com/apk/res/android @3:0
+  start-ns app=http://schemas.android.com/apk/res-auto @3:0
+  start LinearLayout [http://schemas.android.com/apk/res/android|layout_width=match_parent] [http://schemas.android.com/apk/res/android|orientation=vertical] @3:0
+  text [\n] @6:35
+  text [    ] @7:0
+  start TextView [http://schemas.android.com/apk/res/android|id=@+id/title] [http://schemas.android.com/apk/res/android|text=@string/title] [http://schemas.android.com/apk/res-auto|custom=1] @7:4
+  end TextView @7:84
+  text [\n] @7:84
+  text [    ] @8:0
+  start-ns xliff=urn:oasis:names:tc:xliff:document:1.2 @8:4
+  start string [name=greeting] @8:4
+  text [Hello, ] @8:80
+  start urn:oasis:names:tc:xliff:document:1.2|g [id=name] @8:87
+  text [%1$s] @8:106
+  end urn:oasis:names:tc:xliff:document:1.2|g @8:110
+  text [!] @8:120
+  text [\n] @8:121
+  text [    Second line ] @9:0
+  text [&] @9:16
+  text [ more] @9:21
+  end string @9:26
+  end-ns xliff @9:26
+  text [\n] @9:35
+  text [    ] @10:0
+  start string [name=raw] @10:4
+  start-cdata @10:23
+  text [<b>bold</b>] @10:32
+  end-cdata @10:43
+  end string @10:46
+  text [\n] @10:55
+  end LinearLayout @11:0
+  end-ns app @11:0
+  end-ns android @11:0
+  -> ok
+== aapt2: malformed resource 1
+  start resources @1:0
+  start string [name=a] @2:2
+  -> error 7 (mismatched tag) @2:22
+== aapt2: malformed resource 2
+  start resources @1:0
+  -> error 27 (unbound prefix) @2:2
+== aapt2: malformed resource 3
+  start resources @1:0
+  start a @2:2
+  -> error 3 (no element found) @3:0
+== aapt XMLNode: the whole file at once
+  comment [ Copyright (C) 2024 ] @2:0
+  start-ns android=http://schemas.android.com/apk/res/android @3:0
+  start-ns app=http://schemas.android.com/apk/res-auto @3:0
+  start LinearLayout [http://schemas.android.com/apk/res/android|layout_width=match_parent] [http://schemas.android.com/apk/res/android|orientation=vertical] @3:0
+  text [\n] @6:35
+  text [    ] @7:0
+  start TextView [http://schemas.android.com/apk/res/android|id=@+id/title] [http://schemas.android.com/apk/res/android|text=@string/title] [http://schemas.android.com/apk/res-auto|custom=1] @7:4
+  end TextView @7:84
+  text [\n] @7:84
+  text [    ] @8:0
+  start-ns xliff=urn:oasis:names:tc:xliff:document:1.2 @8:4
+  start string [name=greeting] @8:4
+  text [Hello, ] @8:80
+  start urn:oasis:names:tc:xliff:document:1.2|g [id=name] @8:87
+  text [%1$s] @8:106
+  end urn:oasis:names:tc:xliff:document:1.2|g @8:110
+  text [!] @8:120
+  text [\n] @8:121
+  text [    Second line ] @9:0
+  text [&] @9:16
+  text [ more] @9:21
+  end string @9:26
+  end-ns xliff @9:26
+  text [\n] @9:35
+  text [    ] @10:0
+  start string [name=raw] @10:4
+  text [<b>bold</b>] @10:32
+  end string @10:46
+  text [\n] @10:55
+  end LinearLayout @11:0
+  end-ns app @11:0
+  end-ns android @11:0
+  -> ok
