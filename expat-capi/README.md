@@ -83,6 +83,20 @@ message or position (see below).
 from the header and libexpat's `XML_ErrorString` by `tools/generate.py`;
 both tools use libexpat only as a black box.
 
+## Android
+
+expat-capi builds for Android with the NDK (`cargo build --release -p
+expat-capi --target aarch64-linux-android`, with the NDK's clang as linker)
+and with AOSP's Rust, 1.83.0; the library is `libexpat.so`, like AOSP's, and
+exports only the `XML_*` functions. `Android.bp` at the top of the repository
+is a draft for building it in an AOSP tree, not yet tried with Soong.
+
+`tools/android.sh` builds it with the NDK and runs the C probes on Android's
+C library (bionic, linked statically, in an arm64 Linux container), and AOSP's
+wayland scanner built for Android against the one built on libexpat. On 8 Nov
+2026 (NDK r28c, API 24) all four probes printed exactly libexpat's output and
+the 312 scanner runs were identical. Not yet run on an Android device.
+
 ## Not yet matching libexpat
 
 - Multi-byte unknown encodings (`XML_Encoding.convert`) are refused.

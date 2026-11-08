@@ -14,6 +14,9 @@ fn main() {
             println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libexpat.so.1");
             println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={dir}/expat.map");
         }
+        // AOSP's libexpat is plain libexpat.so, with unversioned symbols;
+        // only the XML_* functions are exported (no version script needed).
+        Ok("android") => println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libexpat.so"),
         _ => {}
     }
     println!("cargo:rerun-if-changed=exported_symbols.txt");
