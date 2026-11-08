@@ -2,7 +2,7 @@
 name = "expat-capi"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.83"
 description = "libexpat-compatible C ABI over expat-rs (libexpat.so.1 / libexpat.1.dylib)"
 license = "MIT"
 repository = "https://github.com/Gordion-Solutions/expat-rs"

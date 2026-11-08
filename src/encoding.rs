@@ -61,14 +61,14 @@ fn utf16_unit(be: bool) -> fn([u8; 2]) -> u16 {
 
 fn decode_utf16(bytes: &[u8], be: bool) -> Result<Cow<'_, str>> {
     let unit = utf16_unit(be);
-    let (pairs, odd) = bytes.as_chunks::<2>();
-    if !odd.is_empty() {
+    let pairs = bytes.chunks_exact(2);
+    let units = pairs.clone().map(|pair| unit([pair[0], pair[1]]));
+    if !pairs.remainder().is_empty() {
         // libexpat reports a trailing odd byte as an unclosed token, after
         // the characters before it.
-        let before: String = char::decode_utf16(pairs.iter().map(|&pair| unit(pair))).map(|c| c.unwrap_or('\u{FFFD}')).collect();
+        let before: String = char::decode_utf16(units).map(|c| c.unwrap_or('\u{FFFD}')).collect();
         return Err(error_at(position_after(&before), ErrorKind::UnclosedToken, "UTF-16 input ends with an odd byte".into()));
     }
-    let units = pairs.iter().map(|&pair| unit(pair));
     let text: String = char::decode_utf16(units)
         .collect::<std::result::Result<_, _>>()
         .map_err(|e| error(ErrorKind::InvalidToken, format!("invalid UTF-16: {e}")))?;
@@ -320,7 +320,7 @@ impl StreamDecoder {
                 if n >= 2 && !last && (0xD800..0xDC00).contains(&unit([self.pending[n - 2], self.pending[n - 1]])) {
                     n -= 2;
                 }
-                let units = self.pending[..n].as_chunks::<2>().0.iter().map(|&pair| unit(pair));
+                let units = self.pending[..n].chunks_exact(2).map(|pair| unit([pair[0], pair[1]]));
                 for c in char::decode_utf16(units) {
                     out.push(c.map_err(|e| error(ErrorKind::InvalidToken, format!("invalid UTF-16: {e}")))?);
                 }

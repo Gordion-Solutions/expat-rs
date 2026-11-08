@@ -2,7 +2,7 @@
 name = "expat-rs"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.83"
 description = "Memory-safe XML 1.0 parser: streaming, namespaces, hardened against hostile input; aims for libexpat-level conformance"
 license = "MIT"
 repository = "https://github.com/Gordion-Solutions/expat-rs"
@@ -11,7 +11,7 @@ documentation = "https://docs.rs/expat-rs"
 readme = "README.md"
 keywords = ["xml", "parser", "expat", "memory-safety"]
 categories = ["parser-implementations"]
-exclude = [".github/", "bench/", "capi/", "expat-capi/"]
+exclude = [".github/", "bench/", "capi/", "expat-capi/", "Android.bp"]
 
 [dependencies]
 thiserror = "1.0"
