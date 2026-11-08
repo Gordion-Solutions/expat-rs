@@ -42,6 +42,11 @@ pub struct Lexer<'a> {
     /// A `<?xml` declaration at the start is a text declaration (§4.3.1):
     /// the version is optional. For external entities.
     text_decl: bool,
+    /// Report CDATA sections in pieces (`CDataStart`, `CDataText`,
+    /// `CDataEnd`) instead of as one `CData` token.
+    cdata_pieces: bool,
+    /// Inside a CDATA section reported in pieces.
+    in_cdata: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -61,6 +66,8 @@ impl<'a> Lexer<'a> {
             in_subset: false,
             any_version: false,
             text_decl: false,
+            cdata_pieces: false,
+            in_cdata: false,
         }
     }
 
@@ -79,6 +86,8 @@ impl<'a> Lexer<'a> {
             in_subset: false,
             any_version: false,
             text_decl: false,
+            cdata_pieces: false,
+            in_cdata: false,
         }
     }
 
@@ -160,6 +169,15 @@ impl<'a> Lexer<'a> {
     /// (version optional), for external entities.
     pub(crate) fn with_text_decl(mut self, on: bool) -> Self {
         self.text_decl = on;
+        self
+    }
+
+    /// Report CDATA sections in pieces, so the text of one cut off by the
+    /// end of the input can be handled as far as it goes; `inside`: the
+    /// input starts inside such a section (continuing a document).
+    pub(crate) fn with_cdata_pieces(mut self, on: bool, inside: bool) -> Self {
+        self.cdata_pieces = on;
+        self.in_cdata = on && inside;
         self
     }
 
@@ -384,6 +402,34 @@ impl<'a> Lexer<'a> {
     }
 
 
+    /// Inside a CDATA section reported in pieces: `]]>` closes it;
+    /// otherwise its text up to the next `]]>`, an invalid character (so
+    /// the text before it is handled first, as libexpat does), or the end
+    /// of the input, which the caller may deliver in part.
+    fn scan_cdata_piece(&mut self) -> Result<Option<Token<'a>>> {
+        let rest = &self.src[self.pos.byte_offset..];
+        if rest.starts_with(b"]]>") {
+            self.bump(); self.bump(); self.bump();
+            self.in_cdata = false;
+            return Ok(Some(Token::CDataEnd));
+        }
+        if rest.is_empty() {
+            return Err(XmlError::UnexpectedEof { pos: self.pos, context: "CDATA" });
+        }
+        let start = self.pos.byte_offset;
+        let stop = match self.first_invalid {
+            Some((offset, _)) if offset >= start => offset,
+            _ => usize::MAX,
+        };
+        while self.skip_until(stop, |b| b == b']') == Some(b']') {
+            if self.peek(1) == Some(b']') && self.peek(2) == Some(b'>') {
+                break;
+            }
+            self.bump();
+        }
+        Ok(Some(Token::CDataText(self.slice(start))))
+    }
+
     /// Scan a processing instruction body per §2.6 [Production 16]:
     /// `<?target ...?>`. The leading `<?` has been consumed; the target is
     /// scanned by the caller.
@@ -439,6 +485,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_token(&mut self) -> Result<Option<Token<'a>>> {
+        if self.in_cdata {
+            return self.scan_cdata_piece();
+        }
         if self.is_eof() {
             return Ok(None);
         }
@@ -475,6 +524,10 @@ impl<'a> Lexer<'a> {
                 } else if self.src[self.pos.byte_offset..].starts_with(b"<![CDATA[") {
                     self.pos.byte_offset += 9;
                     self.pos.column += 9;
+                    if self.cdata_pieces {
+                        self.in_cdata = true;
+                        return Ok(Token::CDataStart);
+                    }
                     Ok(Token::CData(self.scan_cdata_body()?))
                 } else if self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE") {
                     self.scan_doctype()

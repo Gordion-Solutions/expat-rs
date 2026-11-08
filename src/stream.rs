@@ -92,6 +92,8 @@ pub struct StreamParser<'l> {
     stall_fresh: bool,
     /// Whether reparse deferral is on (the default).
     deferral: bool,
+    /// `buf` starts inside a CDATA section reported in pieces.
+    in_cdata: bool,
     finished: bool,
 }
 
@@ -124,6 +126,7 @@ impl<'l> StreamParser<'l> {
             stalled_at: 0,
             stall_fresh: false,
             deferral: true,
+            in_cdata: false,
             finished: false,
         }
     }
@@ -139,6 +142,16 @@ impl<'l> StreamParser<'l> {
     /// other events' source text, the whole document can be reproduced.
     pub fn with_outside_whitespace(mut self) -> Self {
         self.state.outside_whitespace = true;
+        self
+    }
+
+    /// Report each CDATA section as [`Event::StartCData`], its text in
+    /// [`Event::CData`] pieces, and [`Event::EndCData`], delivering the text
+    /// of a section cut off by the end of a chunk as far as the next chunk
+    /// can't change, as libexpat does, instead of as one [`Event::CData`]
+    /// once the section is complete.
+    pub fn with_cdata_pieces(mut self) -> Self {
+        self.state.cdata_pieces = true;
         self
     }
 
@@ -361,8 +374,14 @@ impl<'l> StreamParser<'l> {
     /// buffer's length and there is at most one per power of two, so the
     /// attempts for a construct of length n cost at most about 4n in all.
     fn worth_retrying(&self) -> bool {
-        let (now, then) = (self.buf.len(), self.stalled_at);
+        let (now, then) = (self.buffered_input(), self.stalled_at);
         now >= 2 * then || (now >= 1024 && now.next_power_of_two() > then.next_power_of_two())
+    }
+
+    /// The input held for the next attempt, in bytes as given (as libexpat
+    /// measures its buffer): `buf`, and bytes not yet decoded.
+    fn buffered_input(&self) -> usize {
+        self.decoder.input_len(&self.buf) + self.decoder.pending_len()
     }
 
     /// Tokenise and handle as much of `buf` as is complete, then drop the
@@ -375,7 +394,8 @@ impl<'l> StreamParser<'l> {
         let mut lexer = if self.at_start { Lexer::new(&self.buf) } else { Lexer::continuing(&self.buf) }
             .with_edition(self.state.edition)
             .with_libexpat_versions(self.state.libexpat_versions)
-            .with_text_decl(self.state.entity_mode);
+            .with_text_decl(self.state.entity_mode)
+            .with_cdata_pieces(self.state.cdata_pieces, self.in_cdata);
         let mut out = VecDeque::new();
         let mut consumed: Option<Position> = None;
         loop {
@@ -386,19 +406,57 @@ impl<'l> StreamParser<'l> {
                 Ok(Some(tok)) => {
                     let mut end = lexer.position();
                     let mut tok = tok;
-                    if let (Token::Text(text), false, true) = (&tok, last, end.byte_offset == self.buf.len()) {
+                    let cut_off = !last && end.byte_offset == self.buf.len();
+                    if let (Token::Text(text) | Token::CDataText(text), true) = (&tok, cut_off) {
                         // Text may continue in the next chunk: deliver it up
-                        // to a point the next chunk can't change.
+                        // to a point the next chunk can't change (a `\r` may
+                        // start a line end, `]` a `]]>`).
                         let keep = text.len() - text.trim_end_matches(['\r', ']']).len();
                         // Before the root, text other than whitespace is an
                         // error whose position depends on the whole run.
-                        let stray = self.state.before_root() && text.contains(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'));
+                        let stray = matches!(tok, Token::Text(_))
+                            && self.state.before_root()
+                            && text.contains(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'));
                         if keep == text.len() || stray {
                             break;
                         }
                         let text: &str = &text[..text.len() - keep];
                         end = start.advance(text);
-                        tok = Token::Text(text);
+                        tok = if matches!(tok, Token::Text(_)) { Token::Text(text) } else { Token::CDataText(text) };
+                    }
+                    // At the very end, a `]` or `\r` that could have begun a
+                    // `]]>` or a line end leaves the section unclosed there,
+                    // as libexpat reports it.
+                    let mut unclosed = None;
+                    if let (Token::CDataText(text), true) = (&tok, last && end.byte_offset == self.buf.len()) {
+                        let text: &str = text.trim_end_matches([']', '\r']);
+                        if text.len() < end.byte_offset - start.byte_offset {
+                            let at = start.advance(text);
+                            if text.is_empty() {
+                                return Err(XmlError::UnexpectedEof { pos: at.rebase(base), context: "CDATA" });
+                            }
+                            (end, tok, unclosed) = (at, Token::CDataText(text), Some(at));
+                        }
+                    }
+                    // Text in content running into a `]]>`: libexpat's text
+                    // token starts after the last line end, so the text
+                    // after it is part of the bad token and not delivered.
+                    let mut doomed = false;
+                    if let Token::Text(text) = tok {
+                        if self.state.in_content() && self.buf[end.byte_offset..].starts_with("]]>") {
+                            match text.rfind(['\n', '\r']) {
+                                Some(i) => {
+                                    let kept: &str = &text[..=i];
+                                    (end, tok, doomed) = (start.advance(kept), Token::Text(kept), true);
+                                }
+                                None => continue,
+                            }
+                        }
+                    }
+                    match tok {
+                        Token::CDataStart => self.in_cdata = true,
+                        Token::CDataEnd => self.in_cdata = false,
+                        _ => {}
                     }
                     let dtd: Dtd = lexer.take_dtd();
                     self.state.span = Span { start, end };
@@ -411,7 +469,10 @@ impl<'l> StreamParser<'l> {
                         handler(Located { event, span, raw, input_start });
                     }
                     consumed = Some(end);
-                    if end.byte_offset < lexer.position().byte_offset {
+                    if let Some(at) = unclosed {
+                        return Err(XmlError::UnexpectedEof { pos: at.rebase(base), context: "CDATA" });
+                    }
+                    if !doomed && end.byte_offset < lexer.position().byte_offset {
                         break; // text was cut short; resume from `end` next time
                     }
                 }
@@ -438,7 +499,7 @@ impl<'l> StreamParser<'l> {
             self.at_start = false;
         }
         // Whatever is left is an incomplete construct (or held-back text).
-        self.stalled_at = if last { 0 } else { self.buf.len() };
+        self.stalled_at = if last { 0 } else { self.buffered_input() };
         self.stall_fresh = consumed.is_some();
         Ok(())
     }

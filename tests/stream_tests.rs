@@ -235,3 +235,61 @@ fn whitespace_outside_the_root_on_request() {
     // Line ends normalised; the whitespace inside <r> is text, not this.
     assert_eq!(collect(StreamParser::new().with_outside_whitespace()), ["\n", "\n", "\t\n"]);
 }
+
+/// Feed `src` in pieces of `size` to a parser reporting CDATA in pieces,
+/// collecting the events inside the root element.
+fn cdata_pieces(src: &str, size: usize) -> Result<Vec<String>, XmlError> {
+    let mut p = StreamParser::new().with_cdata_pieces();
+    let mut out = Vec::new();
+    for piece in src.as_bytes().chunks(size) {
+        p.feed(piece, |e| out.push(show(&e)))?;
+    }
+    p.finish(|e| out.push(show(&e)))?;
+    Ok(out)
+}
+
+#[test]
+fn cdata_in_pieces_follows_the_input() {
+    let doc = "<r><![CDATA[a]]b\r\nc]]></r>";
+    // Whole: one piece of text between the start and the end.
+    assert_eq!(
+        cdata_pieces(doc, 4096).unwrap()[1..4],
+        ["StartCData", "CData(\"a]]b\\nc\")", "EndCData"].map(String::from)
+    );
+    // In pieces, the text comes as it arrives; joined, it is the same, and
+    // no piece ends in a `]` or `\r` the next could have changed.
+    for size in 1..doc.len() {
+        let events = cdata_pieces(doc, size).unwrap();
+        assert_eq!(events.first().unwrap(), "StartElement { name: \"r\", namespace: None, attributes: [] }");
+        assert_eq!(events[1], "StartCData", "pieces of {size}");
+        assert_eq!(events[events.len() - 2], "EndCData", "pieces of {size}");
+        let text: String = events[2..events.len() - 2]
+            .iter()
+            .map(|e| e.strip_prefix("CData(\"").and_then(|t| t.strip_suffix("\")")).expect("only text inside").to_string())
+            .collect();
+        assert_eq!(text, "a]]b\\nc", "pieces of {size}");
+    }
+    // An empty section has no text; one in an entity's replacement text
+    // comes whole.
+    let events = cdata_pieces("<!DOCTYPE r [<!ENTITY e '<![CDATA[in]]>'>]><r><![CDATA[]]>&e;</r>", 7).unwrap();
+    let inside: Vec<&str> = events.iter().map(String::as_str).filter(|e| e.contains("CData")).collect();
+    assert_eq!(inside, ["StartCData", "EndCData", "StartCData", "CData(\"in\")", "EndCData"]);
+    // Without the option, a section is one event, as before.
+    let mut events = Vec::new();
+    let mut p = StreamParser::new();
+    for piece in doc.as_bytes().chunks(3) {
+        p.feed(piece, |e| events.push(show(&e))).unwrap();
+    }
+    p.finish(|e| events.push(show(&e))).unwrap();
+    assert!(events.contains(&"CData(\"a]]b\\nc\")".to_string()));
+}
+
+#[test]
+fn unclosed_cdata_in_pieces_is_still_an_error() {
+    for doc in ["<r><![CDATA[never", "<r><![CDATA[almost]]", "<r><![CDATA[x\r"] {
+        for size in [1, 3, 4096] {
+            let err = cdata_pieces(doc, size).unwrap_err();
+            assert_eq!(err.kind(), expat_rs::ErrorKind::UnclosedCdataSection, "{doc:?} in pieces of {size}");
+        }
+    }
+}

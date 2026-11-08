@@ -63,7 +63,19 @@ pub enum Event<'a> {
 
     /// `<![CDATA[...]]>`. Surfaces separately from `Text` so callers that
     /// care about the original source representation can distinguish them.
+    /// With [`crate::StreamParser::with_cdata_pieces`], one piece of a
+    /// section's text, between [`Event::StartCData`] and
+    /// [`Event::EndCData`].
     CData(Cow<'a, str>),
+
+    /// The start of a CDATA section, with
+    /// [`crate::StreamParser::with_cdata_pieces`]: its text follows as
+    /// [`Event::CData`] pieces (none for an empty section), delivered as
+    /// the input arrives, then [`Event::EndCData`].
+    StartCData,
+
+    /// The end of a CDATA section reported in pieces.
+    EndCData,
 
     /// `<!-- ... -->`. Per §2.5.
     Comment(Cow<'a, str>),

@@ -102,6 +102,8 @@ pub(crate) struct State<'l> {
     /// Report whitespace outside the root element
     /// (`StreamParser::with_outside_whitespace`).
     pub(crate) outside_whitespace: bool,
+    /// Report CDATA sections in pieces (`StreamParser::with_cdata_pieces`).
+    pub(crate) cdata_pieces: bool,
     /// Stray text before the root whose last run of name characters
     /// reached the end of its text token, by where the run starts. What
     /// follows decides the error (see `stray_text`).
@@ -147,6 +149,7 @@ impl<'l> State<'l> {
             external_refs: false,
             open_entities: Vec::new(),
             outside_whitespace: false,
+            cdata_pieces: false,
             pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
@@ -217,6 +220,7 @@ impl<'l> State<'l> {
             limits: self.expansion_limits,
             edition: self.edition,
             entity_declared_wfc: self.entity_declared_wfc,
+            cdata_pieces: self.cdata_pieces,
         };
         Expander::new(
             &self.entities,
@@ -268,7 +272,7 @@ impl<'l> State<'l> {
 
     /// Character data, references and CDATA are content here: inside an
     /// element, or anywhere in an external entity's content.
-    fn in_content(&self) -> bool {
+    pub(crate) fn in_content(&self) -> bool {
         !self.stack.is_empty() || self.entity_mode
     }
 
@@ -548,6 +552,14 @@ impl<'l> State<'l> {
                 }
                 self.emit(Event::CData(normalize_newlines(s)), out)
             }
+            Token::CDataStart => {
+                if !self.in_content() {
+                    return Err(self.outside_root("CDATA section outside the root element"));
+                }
+                self.emit(Event::StartCData, out)
+            }
+            Token::CDataText(s) => self.emit(Event::CData(normalize_newlines(s)), out),
+            Token::CDataEnd => self.emit(Event::EndCData, out),
             Token::Comment(s) => self.emit(Event::Comment(normalize_newlines(s)), out),
             Token::ProcessingInstruction { target, body } => {
                 self.emit(Event::ProcessingInstruction { target: Cow::Borrowed(target), body: normalize_newlines(body) }, out)

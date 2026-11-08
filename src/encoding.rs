@@ -353,6 +353,12 @@ impl StreamDecoder {
     /// its length in UTF-8 and ASCII, one byte per character in single-byte
     /// encodings, two or four per character in UTF-16. (Before the encoding
     /// is known, and for text fed as text, its length.)
+    /// Bytes received but not yet decoded (part of a character, or the
+    /// start of the input before the encoding is known).
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     pub(crate) fn input_len(&self, text: &str) -> usize {
         match &self.kind {
             None | Some(Kind::Bit8(Kind8::Utf8 | Kind8::Ascii)) => text.len(),

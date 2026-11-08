@@ -65,3 +65,8 @@ fn abi_probe_matches_libexpat() {
 fn positions_match_libexpat() {
     check_probe("positions");
 }
+
+#[test]
+fn cdata_in_pieces_matches_libexpat() {
+    check_probe("cdata");
+}

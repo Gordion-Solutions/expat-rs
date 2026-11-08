@@ -254,6 +254,14 @@ pub struct Shim {
     /// Stopped during the start of an empty element (`<e/>`): its end is
     /// still delivered, since libexpat finishes the token first.
     stop_in_empty_tag: Cell<bool>,
+    /// Stopped in a CDATA section's start handler: libexpat still delivers
+    /// the section's next token (the first piece of its text, or its end),
+    /// and when none is in the input yet, `XML_Parse` succeeds and the next
+    /// call finds the parser finished.
+    stop_in_cdata_start: Cell<bool>,
+    /// Stopped in a CDATA section's end handler: the stop reports the
+    /// position the handler was given, as libexpat does.
+    stop_at_handler: Cell<bool>,
     /// `XML_UseParserAsHandlerArg`: handlers get the parser, not user data.
     parser_as_arg: Cell<bool>,
     /// Source text of the event being delivered, for `XML_DefaultCurrent`
@@ -348,6 +356,8 @@ impl Shim {
             token_end: Cell::new(Position::start()),
             before_root: Cell::new(true),
             stop_in_empty_tag: Cell::new(false),
+            stop_in_cdata_start: Cell::new(false),
+            stop_at_handler: Cell::new(false),
             parser_as_arg: Cell::new(false),
             current_raw: RefCell::new(String::new()),
             id_attributes: RefCell::new(std::collections::HashMap::new()),
@@ -408,7 +418,7 @@ impl Shim {
         let mut p = match &self.entity {
             // Edition, version rule, namespaces and limits come from the
             // document.
-            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()),
+            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()).with_cdata_pieces(),
             None => {
                 // libexpat applies the Fourth Edition's name rules
                 // (Appendix B) but accepts any version number made of name
@@ -418,6 +428,7 @@ impl Shim {
                     .with_libexpat_versions()
                     .with_external_entity_refs()
                     .with_outside_whitespace()
+                    .with_cdata_pieces()
                     .with_reparse_deferral(self.reparse_deferral.get())
                     .with_amplification_limits(self.amplification.get());
                 if self.ns_sep.is_some() {
@@ -482,6 +493,12 @@ impl Shim {
                 // The rest of the empty-element token the stop came in.
                 self.stop_in_empty_tag.set(false);
                 self.dispatch(l);
+            } else if self.stop_in_cdata_start.get() && matches!(l.event, Event::CData(_) | Event::EndCData) {
+                self.stop_in_cdata_start.set(false);
+                match &l.event {
+                    Event::CData(text) => self.cdata_first_token(text, l.raw, l.span.start, l.input_start),
+                    _ => self.dispatch(l),
+                }
             }
         };
         let mut result = parser.feed_located(input, &mut deliver);
@@ -493,7 +510,15 @@ impl Shim {
         let error_input = result.as_ref().err().map(|e| parser.input_offset(e.position()));
         drop(core);
         if self.stop_requested.get() {
-            if !(matches!(self.role, Role::Root) && self.before_root.get()) {
+            if self.stop_in_cdata_start.replace(false) {
+                // Nothing of the section came after the stop in this input.
+                self.pos.set(self.token_end.get());
+                self.input_pos.set(self.input_end.get());
+                self.status.set(Status::Finished);
+                return XML_STATUS_OK;
+            }
+            let at_handler = self.stop_at_handler.replace(false);
+            if !(at_handler || matches!(self.role, Role::Root) && self.before_root.get()) {
                 self.pos.set(self.token_end.get());
                 self.input_pos.set(self.input_end.get());
             }
@@ -1034,35 +1059,31 @@ impl Shim {
                 }
             }
             Event::Text(text) => self.character_data(&text, l.raw, l.span.start, l.input_start),
-            Event::CData(text) => {
-                const OPEN: &str = "<![CDATA[";
-                let content_raw = l.raw.get(OPEN.len()..l.raw.len().saturating_sub(3)).unwrap_or("");
-                let content_at = l.span.start.advance(OPEN);
-                let content_input = l.input_start + self.input_len(OPEN);
+            // CDATA sections come in pieces (`with_cdata_pieces`), their
+            // text as far as the input goes, as libexpat delivers it.
+            Event::StartCData => {
                 match h.start_cdata.get() {
                     // SAFETY: registered StartCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default(OPEN);
+                        self.to_default(l.raw);
                     }
                 }
                 if self.stop_requested.get() {
-                    return;
+                    self.stop_in_cdata_start.set(true);
                 }
-                self.character_data(&text, content_raw, content_at, content_input);
-                if self.stop_requested.get() {
-                    return;
-                }
-                self.pos.set(content_at.advance(content_raw));
-                self.input_pos.set(content_input + self.input_len(content_raw));
-                self.token_end.set(l.span.end);
-                self.input_end.set(l.input_start + self.input_len(l.raw));
+            }
+            Event::CData(text) => self.cdata_text(&text, l.raw, l.span.start, l.input_start),
+            Event::EndCData => {
                 match h.end_cdata.get() {
                     // SAFETY: registered EndCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default("]]>");
+                        self.to_default(l.raw);
                     }
+                }
+                if self.stop_requested.get() {
+                    self.stop_at_handler.set(true);
                 }
             }
             Event::Comment(text) => match h.comment.get() {
@@ -1333,6 +1354,48 @@ impl Shim {
                 self.stop_error.set(XML_ERROR_NOT_STANDALONE);
                 self.stop_requested.set(true);
             }
+        }
+    }
+
+    /// After a stop in a CDATA section's start handler, the first token of
+    /// its text, which libexpat still delivers: up to the first `]` after
+    /// the first character or the first line end, or a line end alone.
+    fn cdata_first_token(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+        let to_bracket = |s: &str| s.char_indices().skip(1).find(|&(_, c)| c == ']').map_or(s.len(), |(i, _)| i);
+        let (text, raw) = (&text[..to_bracket(text)], &raw[..to_bracket(raw)]);
+        let (text, raw) = if raw.starts_with(['\r', '\n']) {
+            ("\n", &raw[..if raw.starts_with("\r\n") { 2 } else { 1 }])
+        } else {
+            let to_eol = |s: &str| s.find(['\r', '\n']).unwrap_or(s.len());
+            (&text[..to_eol(text)], &raw[..to_eol(raw)])
+        };
+        self.char_piece(text, raw, (start, start_input));
+    }
+
+    /// Text of a CDATA section: libexpat's tokens there also end before
+    /// each `]` (which may start the closing `]]>`), so its handler gets
+    /// the text in parts, each after the first starting with a `]`.
+    fn cdata_text(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+        fn parts(s: &str) -> Vec<&str> {
+            let mut parts = Vec::new();
+            let mut from = 0;
+            for (i, _) in s.match_indices(']') {
+                if i > from {
+                    parts.push(&s[from..i]);
+                    from = i;
+                }
+            }
+            parts.push(&s[from..]);
+            parts
+        }
+        // Line ends are normalised in `text`, not in `raw`; `]`s line up.
+        let mut at = (start, start_input);
+        for (t, r) in parts(text).into_iter().zip(parts(raw)) {
+            if self.stop_requested.get() {
+                return;
+            }
+            self.character_data(t, r, at.0, at.1);
+            at = (at.0.advance(r), at.1 + self.input_len(r));
         }
     }
 
