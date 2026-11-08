@@ -60,7 +60,16 @@ LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
 what libexpat 2.8.2 prints (`tests/c/*.expected`, recorded by
 `tools/regen_expected.sh`): callbacks and their arguments, line, column and
 byte positions, error codes, messages and positions, stopping, buffers,
-encodings, content models, settings.
+encodings, content models, settings. `tests/c/android_consumers.c` calls the
+API the way Android's users of libexpat do (libcore's ExpatParser, Skia,
+aapt2 and aapt, frameworks/av, audio_route, the wayland scanner), following
+their AOSP source.
+
+`tools/wayland_scanner.sh` builds AOSP's wayland scanner on libexpat and on
+expat-capi and runs both over the 52 protocols in AOSP's `external/wayland`
+and `external/wayland-protocols`, in every output mode, and over 304 broken
+copies. On 8 Nov 2026 the generated code, the messages (with their line and
+column) and the exit status were identical in all 4272 runs.
 
 `tools/xmlwf_suite.py` runs libexpat's own `xmlwf` (a dynamically linked
 build, such as Homebrew's) over the W3C conformance suite on libexpat and on
