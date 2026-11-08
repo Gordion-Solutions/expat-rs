@@ -22,7 +22,7 @@ programs linked against them look for libexpat's real file names, so use
 Linux quietly load the system libexpat instead: check with
 `DYLD_PRINT_LIBRARIES=1` (macOS) or `ldd` (Linux).
 
-Only the `XML_*` symbols are exported (`exported_symbols.txt`, `expat.map`).
+Only the `XML_*` symbols are exported (on macOS through `exported_symbols.txt`), unversioned like libexpat's.
 
 ## What's there
 
