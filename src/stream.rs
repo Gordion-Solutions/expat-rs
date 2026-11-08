@@ -21,6 +21,7 @@
 //! quadratic: the class of libexpat's CVE-2023-52425, fixed there in a similar
 //! way. Events are still delivered in order, at the latest by `finish`.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 use crate::chars::Edition;
@@ -70,6 +71,11 @@ pub struct StreamParser<'l> {
     buf: String,
     /// Position of `buf[0]` in the document.
     base: Position,
+    /// Bytes of input (before decoding) that `buf[0]` comes after.
+    input_base: usize,
+    /// How much of `buf` has been measured in input bytes: (offset in
+    /// `buf`, input bytes up to it), so events in order are measured once.
+    measured: Cell<(usize, usize)>,
     /// Nothing consumed yet, so the XML declaration may still come.
     at_start: bool,
     /// Whether input came as bytes (`feed`) or text (`feed_str`).
@@ -109,6 +115,8 @@ impl<'l> StreamParser<'l> {
             decoder: StreamDecoder::new(),
             buf: String::new(),
             base: Position::start(),
+            input_base: 0,
+            measured: Cell::new((0, 0)),
             at_start: true,
             input: None,
             failed: None,
@@ -123,6 +131,14 @@ impl<'l> StreamParser<'l> {
     /// See [`crate::Parser::with_edition`].
     pub fn with_edition(mut self, edition: Edition) -> Self {
         self.state.set_edition(edition);
+        self
+    }
+
+    /// Report whitespace outside the root element (before it and after it)
+    /// as [`Event::Whitespace`] rather than dropping it, so that, with the
+    /// other events' source text, the whole document can be reproduced.
+    pub fn with_outside_whitespace(mut self) -> Self {
+        self.state.outside_whitespace = true;
         self
     }
 
@@ -201,6 +217,28 @@ impl<'l> StreamParser<'l> {
     pub fn with_unknown_encoding(mut self, handler: impl FnMut(&str) -> Option<ByteMap> + 'l) -> Self {
         self.unknown_encoding = Some(Box::new(handler));
         self
+    }
+
+    /// Input bytes (before decoding) up to offset `at` in `buf`, measuring
+    /// on from the last offset measured when `at` is past it.
+    fn input_at(&self, at: usize) -> usize {
+        let at = floor_char_boundary(&self.buf, at.min(self.buf.len()));
+        let (done, bytes) = self.measured.get();
+        let bytes = if at >= done {
+            bytes + self.decoder.input_len(&self.buf[done..at])
+        } else {
+            self.decoder.input_len(&self.buf[..at])
+        };
+        self.measured.set((at, bytes));
+        self.input_base + bytes
+    }
+
+    /// Where `pos` (a position in the decoded document, at or after
+    /// [`position`](Self::position)) is in the input as given to
+    /// [`feed`](Self::feed), in bytes before decoding. For UTF-8 input, its
+    /// byte offset; see [`Located::input_start`].
+    pub fn input_offset(&self, pos: Position) -> usize {
+        self.input_at(pos.byte_offset.saturating_sub(self.base.byte_offset))
     }
 
     /// How far parsing has got: the position just after the last input
@@ -367,9 +405,10 @@ impl<'l> StreamParser<'l> {
                     self.state.direct_bytes = end.rebase(base).byte_offset as u64;
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
                     for (event, span) in out.drain(..) {
+                        let input_start = self.input_at(span.start.byte_offset);
                         let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                         let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
-                        handler(Located { event, span, raw });
+                        handler(Located { event, span, raw, input_start });
                     }
                     consumed = Some(end);
                     if end.byte_offset < lexer.position().byte_offset {
@@ -392,6 +431,8 @@ impl<'l> StreamParser<'l> {
         }
         drop(lexer);
         if let Some(end) = consumed {
+            self.input_base = self.input_at(end.byte_offset);
+            self.measured.set((0, 0));
             self.base = end.rebase(base);
             self.buf.drain(..end.byte_offset);
             self.at_start = false;
@@ -401,4 +442,12 @@ impl<'l> StreamParser<'l> {
         self.stall_fresh = consumed.is_some();
         Ok(())
     }
+}
+
+/// The largest character boundary in `s` at or before `at`.
+fn floor_char_boundary(s: &str, mut at: usize) -> usize {
+    while !s.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
 }

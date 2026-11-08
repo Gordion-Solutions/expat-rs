@@ -76,6 +76,31 @@ static void *my_malloc(size_t n) { mallocs++; return malloc(n); }
 static void *my_realloc(void *x, size_t n) { return realloc(x, n); }
 static void my_free(void *x) { if (x) frees++; free(x); }
 
+static void parse_whole(const char *label, const char *doc);
+
+/* Markers for the default-handler tests: which handler took what. */
+static void m_sd(void *u, const XML_Char *n, const XML_Char *sy, const XML_Char *pu, int h) { printf("{start-doctype}\n"); }
+static void m_ed(void *u) { printf("{end-doctype}\n"); }
+static void m_el(void *u, const XML_Char *n, XML_Content *c) { printf("{element-decl}\n"); XML_FreeContentModel(p, c); }
+static void m_at(void *u, const XML_Char *e, const XML_Char *a, const XML_Char *t, const XML_Char *d, int r) { printf("{attlist-decl}\n"); }
+static void m_en(void *u, const XML_Char *n, int pe, const XML_Char *v, int vl, const XML_Char *b, const XML_Char *sy,
+                 const XML_Char *pu, const XML_Char *no) { printf("{entity-decl}\n"); }
+static void m_no(void *u, const XML_Char *n, const XML_Char *b, const XML_Char *sy, const XML_Char *pu) { printf("{notation-decl}\n"); }
+/* What reaches the default handler, with 0-3 groups of other handlers set. */
+static void default_view(const char *doc, int groups) {
+  p = XML_ParserCreate(NULL);
+  XML_SetDefaultHandler(p, dflt);
+  if (groups >= 1) XML_SetDoctypeDeclHandler(p, m_sd, m_ed);
+  if (groups >= 2) {
+    XML_SetElementDeclHandler(p, m_el); XML_SetAttlistDeclHandler(p, m_at);
+    XML_SetEntityDeclHandler(p, m_en); XML_SetNotationDeclHandler(p, m_no);
+  }
+  if (groups >= 3) { XML_SetProcessingInstructionHandler(p, pi); XML_SetCommentHandler(p, comment); }
+  char label[64];
+  snprintf(label, sizeof label, "default handler view, %d handler groups", groups);
+  parse_whole(label, doc);
+}
+
 static void all_handlers(void) {
   XML_SetUserData(p, (void *)"U");
   XML_SetElementHandler(p, start, end);
@@ -92,13 +117,6 @@ static void all_handlers(void) {
   XML_SetAttlistDeclHandler(p, attlist);
   XML_SetElementDeclHandler(p, element);
   XML_SetNamespaceDeclHandler(p, sns, ens);
-}
-
-/* Only character data: for documents whose positions or declaration
-   order aren't compared yet (non-UTF-8 byte indexes; see README.md). */
-static void text_only(void) {
-  XML_SetUserData(p, (void *)"U");
-  XML_SetCharacterDataHandler(p, text);
 }
 
 static void report(int ok) {
@@ -201,6 +219,17 @@ int main(void) {
   p = XML_ParserCreate(NULL); XML_SetDefaultHandler(p, dflt);
   parse_whole("default handler only", "<?xml version='1.0'?><r a='1'>x<![CDATA[y]]><!--c--><?p q?>\n</r>");
 
+  {
+    const char *doc = "<?xml version='1.0'?>\r\n<!-- top -->\n<!DOCTYPE  r PUBLIC '-//P//EN' \"r.dtd\" [\n"
+                      "  <!ELEMENT r (#PCDATA|a|b)*>\n  <!ELEMENT a (b?,(c|d)+)*>\n"
+                      "  <!ATTLIST r x CDATA #IMPLIED y (p|q) 'p'>\n  <!ENTITY e 'v'>\n"
+                      "  <!ENTITY % pe SYSTEM 'p.ent'>\n  <!ENTITY u SYSTEM 'u' NDATA n>\n"
+                      "  <!NOTATION n PUBLIC 'n'>\n  <?pi data?>\n  <!-- c -->\n  %pe;\n]\t>\n<r/>\n\t<!-- end -->\n";
+    for (int groups = 0; groups <= 3; groups++) default_view(doc, groups);
+    default_view("<!DOCTYPE\tr\r\nSYSTEM\n'a'>\r\n<r/>", 0);
+    default_view("<!DOCTYPE r SYSTEM 'a'><r/>", 1);
+  }
+
   p = XML_ParserCreate(NULL);
   XML_SetElementHandler(p, stopping_start, end);
   parse_whole("stop from handler", "<r><stop/><after/></r>");
@@ -239,21 +268,31 @@ int main(void) {
   }
   XML_ParserFree(p);
 
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, latin2_ish, (void *)"D");
   parse_whole("unknown encoding via map", "<?xml version='1.0' encoding='x-test'?><r>\xa1z</r>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, latin2_ish, (void *)"D");
   parse_whole("byte invalid in map", "<?xml version='1.0' encoding='x-test'?><r>\xff</r>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   XML_SetUnknownEncodingHandler(p, refuse_encoding, NULL);
   parse_whole("handler refuses encoding", "<?xml version='1.0' encoding='x-test'?><r/>");
-  p = XML_ParserCreate(NULL); text_only();
+  p = XML_ParserCreate(NULL); all_handlers();
   parse_whole("no handler for encoding", "<?xml version='1.0' encoding='x-test'?><r/>");
 
-  p = XML_ParserCreate("ISO-8859-1"); text_only();
+  p = XML_ParserCreate("ISO-8859-1"); all_handlers();
   parse_whole("protocol encoding overrides declaration", "<?xml version='1.0' encoding='utf-8'?><r>caf\xe9</r>");
 
+  {
+    /* Byte indexes count input bytes: UTF-16 and Latin-1 documents. */
+    const char u16[] = "\xff\xfe<\0r\0>\0\xe9\0<\0x\0/\0>\0\x34\xd8\x1e\xdd<\0y\0/\0>\0<\0/\0r\0>\0";
+    p = XML_ParserCreate(NULL); all_handlers();
+    printf("=== byte index in UTF-16\n");
+    report(XML_Parse(p, u16, (int)sizeof u16 - 1, 1) == XML_STATUS_OK);
+    XML_ParserFree(p);
+    p = XML_ParserCreate(NULL); all_handlers();
+    parse_whole("byte index in Latin-1", "<?xml version='1.0' encoding='iso-8859-1'?><r>\xe9\xe9<x/>\xe9\n\xe9<y/></r>");
+  }
   {
     XML_Memory_Handling_Suite ms = {my_malloc, my_realloc, my_free};
     p = XML_ParserCreate_MM(NULL, &ms, NULL); all_handlers();

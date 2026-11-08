@@ -112,3 +112,31 @@ fn joined(events: Vec<Simple>) -> Vec<Simple> {
     }
     out
 }
+
+#[test]
+fn input_offsets_count_bytes_before_decoding() {
+    use expat_rs::StreamParser;
+    // Where each element starts, in input bytes, for one document in
+    // several encodings: <r>é<x/>𝄞<y/></r>.
+    let doc = "<r>é<x/>𝄞<y/></r>";
+    let starts = |input: &[u8], chunk: usize| {
+        let mut p = StreamParser::new();
+        let mut got = Vec::new();
+        let mut record = |l: expat_rs::Located<'_>| if let expat_rs::Event::StartElement { .. } = l.event { got.push(l.input_start) };
+        for c in input.chunks(chunk) {
+            p.feed_located(c, &mut record).unwrap();
+        }
+        p.finish_located(&mut record).unwrap();
+        got
+    };
+    let latin1_doc = "<?xml version='1.0' encoding='iso-8859-1'?><r>é<x/>x<y/></r>";
+    let latin1: Vec<u8> = latin1_doc.chars().map(|c| c as u8).collect();
+    let utf16le: Vec<u8> = [0xFF, 0xFE].into_iter().chain(doc.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    let utf8_bom: Vec<u8> = [0xEF, 0xBB, 0xBF].into_iter().chain(doc.bytes()).collect();
+    for chunk in [usize::MAX, 1] {
+        assert_eq!(starts(doc.as_bytes(), chunk), [0, 5, 13], "UTF-8: é is 2 bytes, 𝄞 4");
+        assert_eq!(starts(&latin1, chunk), [43, 47, 52], "Latin-1: one byte per character (declaration 43)");
+        assert_eq!(starts(&utf16le, chunk), [2, 10, 22], "UTF-16: BOM 2, then 2 per character, 4 for 𝄞");
+        assert_eq!(starts(&utf8_bom, chunk), [3, 8, 16], "UTF-8 with BOM");
+    }
+}

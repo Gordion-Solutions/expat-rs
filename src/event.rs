@@ -166,6 +166,12 @@ pub enum Event<'a> {
     /// not-standalone handler at such a reference.
     ParameterEntityRef(Cow<'a, str>),
 
+    /// Whitespace outside the root element (before it or after it, outside
+    /// markup), with line endings normalised (§2.11). Reported only with
+    /// [`crate::StreamParser::with_outside_whitespace`]; libexpat passes it
+    /// to its default handler.
+    Whitespace(Cow<'a, str>),
+
     /// A reference in content to an external parsed entity, reported for
     /// the caller to read when
     /// [`crate::StreamParser::with_external_entity_refs`] is on (and no
@@ -281,6 +287,11 @@ pub struct Located<'a> {
     /// The source text of `span`, exactly as written (after decoding to
     /// UTF-8; line endings not normalised).
     pub raw: &'a str,
+    /// Where the span starts in the input as given to the parser, in bytes
+    /// before decoding: the same as `span.start.byte_offset` for UTF-8
+    /// input, different for input in other encodings (libexpat's
+    /// `XML_GetCurrentByteIndex` counts these bytes).
+    pub input_start: usize,
 }
 
 /// An attribute on a start tag.
