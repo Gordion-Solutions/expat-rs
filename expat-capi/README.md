@@ -95,7 +95,18 @@ is a draft for building it in an AOSP tree, not yet tried with Soong.
 C library (bionic, linked statically, in an arm64 Linux container), and AOSP's
 wayland scanner built for Android against the one built on libexpat. On 8 Nov
 2026 (NDK r28c, API 24) all four probes printed exactly libexpat's output and
-the 312 scanner runs were identical. Not yet run on an Android device.
+the 312 scanner runs were identical.
+
+`tools/android_device.sh` runs the probes and the scanner on a device or
+emulator, linked dynamically and loading our `libexpat.so` and then the
+device's own. On 8 Nov 2026, on the Android 15 x86_64 emulator (AOSP image,
+whose libexpat is 2.6.2): all four probes printed exactly libexpat 2.8.2's
+output, and the 312 scanner runs were identical on both libraries. The
+device's libexpat gives the same output for the three probes written around
+Android's usage; in `abi_probe` it differs where libexpat changed after 2.6.2
+(stopping a parser that hasn't started), and crashes when `XML_Parse` is
+called from inside a handler, which later libexpat and expat-capi refuse.
+Not yet run on a physical device.
 
 ## Not yet matching libexpat
 
