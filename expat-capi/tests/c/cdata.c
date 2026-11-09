@@ -86,6 +86,14 @@ int main(void) {
   const char *ent = "<!DOCTYPE r [<!ENTITY e '<![CDATA[in & entity]]>'>]><r>&e;<![CDATA[]]>&e;</r>";
   run(ent, strlen(ent), 4096, 0, NULL);
   run(ent, strlen(ent), 5, 0, NULL);
+  const char *ent2 = "<!DOCTYPE r [<!ENTITY e '<![CDATA[a]b\nc]]d\r\ne]]>'>]>\n<r>&e;</r>";
+  for (size_t piece = 3; piece <= 9; piece += 3) run(ent2, strlen(ent2), piece, 0, NULL);
+  run(ent2, strlen(ent2), 4096, 0, NULL);
+  for (stop_at = 1; stop_at <= 3; stop_at++) {
+    printf("-- stop at callback %d\n", stop_at);
+    run(ent2, strlen(ent2), 4096, 0, NULL);
+  }
+  stop_at = 0;
 
   printf("== the default handler\n");
   for (size_t piece = 3; piece <= 9; piece += 3) run(docs[0], strlen(docs[0]), piece, 1, NULL);
@@ -103,10 +111,35 @@ int main(void) {
   const char *open2 = "<r><![CDATA[almost]]";
   run(open2, strlen(open2), 3, 0, NULL);
 
+  printf("== a stray ]]> in content\n");
+  const char *strays[] = {"<r>abcd]]></r>", "<r>ab\ncd]]></r>", "<r>ab\r\ncd]]>e</r>", "<r>]]></r>", "<r>a]]>b</r>",
+                          "<r>caf\xc3\xa9]]></r>"};
+  const size_t stray_pieces[] = {2, 5, 4096};
+  for (int i = 0; i < 6; i++)
+    for (int j = 0; j < 3; j++) run(strays[i], strlen(strays[i]), stray_pieces[j], 0, NULL);
+
   printf("== stopping in a CDATA callback\n");
   for (stop_at = 1; stop_at <= 4; stop_at++) {
     printf("-- stop at callback %d\n", stop_at);
     run(docs[0], strlen(docs[0]), 7, 0, NULL);
+  }
+  stop_at = 0;
+
+  printf("== stopping in the start handler at the end of a chunk, then more\n");
+  const char *heads[] = {"<r><![CDATA[", "<r><![CDATA[x", "<r><![CDATA[]]>", "<r>t<![CDATA["};
+  for (int i = 0; i < 4; i++) {
+    calls = 0;
+    stop_at = 1;
+    p = XML_ParserCreate(NULL);
+    XML_SetCharacterDataHandler(p, text);
+    XML_SetCdataSectionHandler(p, scdata, ecdata);
+    const char *parts[] = {heads[i], "abc]]></r>", NULL};
+    for (int j = 0; j < 3; j++) {
+      enum XML_Status st = XML_Parse(p, parts[j], parts[j] ? (int)strlen(parts[j]) : 0, parts[j] == NULL);
+      printf("  call %d -> %d code %d", j + 1, st, XML_GetErrorCode(p));
+      at();
+    }
+    XML_ParserFree(p);
   }
   stop_at = 0;
 

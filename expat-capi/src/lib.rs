@@ -28,6 +28,7 @@
 mod generated;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr, CString};
 use std::ptr;
 
@@ -262,6 +263,13 @@ pub struct Shim {
     /// Stopped in a CDATA section's end handler: the stop reports the
     /// position the handler was given, as libexpat does.
     stop_at_handler: Cell<bool>,
+    /// The event being handled came from expanding an entity reference.
+    in_entity: Cell<bool>,
+    /// The ATTLIST declaration last reported (its text's address and
+    /// length, during one XML_Parse call), where each of its attributes is
+    /// reported and where it ends in the input: worked out once for all its
+    /// attributes, so that a long declaration costs no more than its length.
+    attlist: RefCell<Option<AttlistPlaces>>,
     /// `XML_UseParserAsHandlerArg`: handlers get the parser, not user data.
     parser_as_arg: Cell<bool>,
     /// Source text of the event being delivered, for `XML_DefaultCurrent`
@@ -358,6 +366,8 @@ impl Shim {
             stop_in_empty_tag: Cell::new(false),
             stop_in_cdata_start: Cell::new(false),
             stop_at_handler: Cell::new(false),
+            in_entity: Cell::new(false),
+            attlist: RefCell::new(None),
             parser_as_arg: Cell::new(false),
             current_raw: RefCell::new(String::new()),
             id_attributes: RefCell::new(std::collections::HashMap::new()),
@@ -505,6 +515,8 @@ impl Shim {
         if result.is_ok() && is_final && !self.stop_requested.get() {
             result = parser.finish_located(&mut deliver);
         }
+        // Its key is an address in this call's text.
+        self.attlist.borrow_mut().take();
         let parsed_to = parser.position();
         let parsed_input = parser.input_offset(parsed_to);
         let error_input = result.as_ref().err().map(|e| parser.input_offset(e.position()));
@@ -518,12 +530,16 @@ impl Shim {
                 return XML_STATUS_OK;
             }
             let at_handler = self.stop_at_handler.replace(false);
-            if !(at_handler || matches!(self.role, Role::Root) && self.before_root.get()) {
+            // Within an entity's replacement text libexpat stays at the
+            // reference.
+            if !(at_handler || self.in_entity.get() || matches!(self.role, Role::Root) && self.before_root.get()) {
                 self.pos.set(self.token_end.get());
                 self.input_pos.set(self.input_end.get());
             }
             self.error.set(self.stop_error.get());
-            self.status.set(Status::Failed);
+            // Stopped is finished, as in libexpat: a later call reports
+            // XML_ERROR_FINISHED.
+            self.status.set(Status::Finished);
             return XML_STATUS_ERROR;
         }
         match result {
@@ -674,6 +690,53 @@ fn doctype_header_len(raw: &str) -> usize {
     raw.len()
 }
 
+/// See `Parser::attlist`.
+struct AttlistPlaces {
+    key: (usize, usize),
+    places: HashMap<String, (Position, usize)>,
+    end: usize,
+}
+
+/// Whether `raw` is one general entity reference (not a character reference
+/// or a predefined entity, which libexpat treats as ordinary tokens): the
+/// events from its replacement text all carry it.
+fn is_entity_reference(raw: &str) -> bool {
+    match raw.strip_prefix('&').and_then(|r| r.strip_suffix(';')) {
+        Some(name) => {
+            !name.is_empty()
+                && !name.starts_with('#')
+                && !name.contains(['&', ';'])
+                && !matches!(name, "amp" | "lt" | "gt" | "apos" | "quot")
+        }
+        None => false,
+    }
+}
+
+/// Whether `text` is `raw` with its line ends normalised: character data
+/// from the source, not from an entity's replacement text.
+fn is_source(text: &str, raw: &str) -> bool {
+    if raw.contains('\r') {
+        raw.replace("\r\n", "\n").replace('\r', "\n") == text
+    } else {
+        raw == text
+    }
+}
+
+/// CDATA text in libexpat's tokens, which also end before each `]` (which
+/// may start the closing `]]>`): each part after the first starts with `]`.
+fn cdata_parts(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut from = 0;
+    for (i, _) in s.match_indices(']') {
+        if i > from {
+            parts.push(&s[from..i]);
+            from = i;
+        }
+    }
+    parts.push(&s[from..]);
+    parts
+}
+
 /// Where libexpat reports a DTD event's position, as a byte offset into
 /// its source text: at the token that completes what the handler is told.
 /// The DOCTYPE starts at its `[` or closing `>`, and ends at the closing
@@ -698,18 +761,25 @@ fn decl_trigger(event: &Event<'_>, raw: &str) -> Option<usize> {
         Event::EntityDecl { system_id: Some(_), notation: None, .. } => close,
         Event::EntityDecl { .. } | Event::ElementDecl { .. } => last?,
         Event::NotationDecl { system_id, .. } => if system_id.is_some() { last? } else { close },
-        Event::AttlistDecl { attribute, .. } => attlist_default(body, attribute)?,
+        // Each attribute's: see `Parser::attlist_trigger`.
+        Event::AttlistDecl { .. } => return None,
         _ => return None,
     };
     Some(token.as_ptr() as usize - raw.as_ptr() as usize)
 }
 
-/// The default of `attribute` in an ATTLIST's tokens (whitespace dropped,
-/// `>` excluded): after `<!ATTLIST` and the element's name, each definition
-/// is a name, a type (a keyword, an enumeration in parentheses, or
-/// `NOTATION` and one), then `#IMPLIED`, `#REQUIRED`, or a value with or
-/// without `#FIXED`. The first definition of the name, as libexpat keeps.
-fn attlist_default<'a>(tokens: &[&'a str], attribute: &str) -> Option<&'a str> {
+/// Where libexpat reports each attribute of an ATTLIST declaration (`raw`):
+/// at its default, as an offset into `raw`, in order. After `<!ATTLIST` and
+/// the element's name, each definition is a name, a type (a keyword, an
+/// enumeration in parentheses, or `NOTATION` and one), then `#IMPLIED`,
+/// `#REQUIRED`, or a value with or without `#FIXED`. The first definition of
+/// a name, as libexpat keeps, is the first in the list.
+fn attlist_defaults(raw: &str) -> Vec<(&str, usize)> {
+    let mut defaults = Vec::new();
+    let tokens: Vec<&str> = dtd_tokens(raw).into_iter().filter(|t| !t.starts_with([' ', '\t', '\r', '\n'])).collect();
+    let Some((_, tokens)) = tokens.split_last().filter(|(close, _)| **close == ">") else {
+        return defaults;
+    };
     let mut i = 2;
     while i < tokens.len() {
         let name = tokens[i];
@@ -718,7 +788,7 @@ fn attlist_default<'a>(tokens: &[&'a str], attribute: &str) -> Option<&'a str> {
             i += 1;
         }
         if tokens.get(i) == Some(&"(") {
-            while !tokens.get(i)?.starts_with(')') {
+            while tokens.get(i).is_some_and(|t| !t.starts_with(')')) {
                 i += 1;
             }
         }
@@ -726,13 +796,11 @@ fn attlist_default<'a>(tokens: &[&'a str], attribute: &str) -> Option<&'a str> {
         if tokens.get(i) == Some(&"#FIXED") {
             i += 1;
         }
-        let default = *tokens.get(i)?;
+        let Some(default) = tokens.get(i) else { break };
         i += 1;
-        if name == attribute {
-            return Some(default);
-        }
+        defaults.push((name, default.as_ptr() as usize - raw.as_ptr() as usize));
     }
-    None
+    defaults
 }
 
 /// Split DTD markup into the tokens libexpat gives its default handler:
@@ -911,12 +979,24 @@ impl Shim {
     fn dispatch(&self, l: Located<'_>) {
         // A declaration's handlers are told where the token completing it
         // is, not where it starts.
-        let at = decl_trigger(&l.event, l.raw).unwrap_or(0);
-        self.pos.set(l.span.start.advance(&l.raw[..at]));
+        let (pos, input_pos, input_end) = match &l.event {
+            Event::AttlistDecl { attribute, .. } => self.attlist_place(&l, attribute),
+            event => {
+                let at = decl_trigger(event, l.raw).unwrap_or(0);
+                let before = &l.raw[..at];
+                (
+                    l.span.start.advance(before),
+                    l.input_start + self.input_len(before),
+                    l.input_start + self.input_len(l.raw),
+                )
+            }
+        };
+        self.pos.set(pos);
         self.current_span.set(Some(l.span));
         self.token_end.set(l.span.end);
-        self.input_pos.set(l.input_start + self.input_len(&l.raw[..at]));
-        self.input_end.set(l.input_start + self.input_len(l.raw));
+        self.input_pos.set(input_pos);
+        self.input_end.set(input_end);
+        self.in_entity.set(is_entity_reference(l.raw));
         if matches!(l.event, Event::StartElement { .. }) {
             self.before_root.set(false);
         }
@@ -1357,40 +1437,73 @@ impl Shim {
         }
     }
 
+    /// Where libexpat reports `attribute` of the ATTLIST declaration `l`
+    /// (see `decl_trigger`): its position and input offset, and the input
+    /// offset after the declaration.
+    fn attlist_place(&self, l: &Located<'_>, attribute: &str) -> (Position, usize, usize) {
+        let key = (l.raw.as_ptr() as usize, l.raw.len());
+        let mut cache = self.attlist.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.key != key) {
+            // One pass over the declaration, from default to default.
+            let mut defaults = attlist_defaults(l.raw);
+            defaults.sort_by_key(|&(_, at)| at);
+            let (mut from, mut pos, mut input) = (0, l.span.start, l.input_start);
+            let mut places = HashMap::new();
+            for (name, at) in defaults {
+                pos = pos.advance(&l.raw[from..at]);
+                input += self.input_len(&l.raw[from..at]);
+                from = at;
+                places.entry(name.to_string()).or_insert((pos, input));
+            }
+            let end = input + self.input_len(&l.raw[from..]);
+            *cache = Some(AttlistPlaces { key, places, end });
+        }
+        let c = cache.as_ref().expect("filled above");
+        let (pos, input) = c.places.get(attribute).copied().unwrap_or((l.span.start, l.input_start));
+        (pos, input, c.end)
+    }
+
     /// After a stop in a CDATA section's start handler, the first token of
     /// its text, which libexpat still delivers: up to the first `]` after
     /// the first character or the first line end, or a line end alone.
     fn cdata_first_token(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        let to_bracket = |s: &str| s.char_indices().skip(1).find(|&(_, c)| c == ']').map_or(s.len(), |(i, _)| i);
-        let (text, raw) = (&text[..to_bracket(text)], &raw[..to_bracket(raw)]);
-        let (text, raw) = if raw.starts_with(['\r', '\n']) {
-            ("\n", &raw[..if raw.starts_with("\r\n") { 2 } else { 1 }])
+        fn first(s: &str) -> &str {
+            let s = cdata_parts(s)[0];
+            match s.find(['\r', '\n']) {
+                Some(0) => &s[..if s.starts_with("\r\n") { 2 } else { 1 }],
+                Some(eol) => &s[..eol],
+                None => s,
+            }
+        }
+        let t = first(text);
+        let t = if t.starts_with('\r') { "\n" } else { t };
+        if is_source(text, raw) {
+            self.char_piece(t, first(raw), (start, start_input));
         } else {
-            let to_eol = |s: &str| s.find(['\r', '\n']).unwrap_or(s.len());
-            (&text[..to_eol(text)], &raw[..to_eol(raw)])
-        };
-        self.char_piece(text, raw, (start, start_input));
+            // From an entity's replacement text: at the reference.
+            self.pos.set(start);
+            self.input_pos.set(start_input);
+            self.deliver_chars(t, raw);
+        }
     }
 
     /// Text of a CDATA section: libexpat's tokens there also end before
     /// each `]` (which may start the closing `]]>`), so its handler gets
     /// the text in parts, each after the first starting with a `]`.
     fn cdata_text(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        fn parts(s: &str) -> Vec<&str> {
-            let mut parts = Vec::new();
-            let mut from = 0;
-            for (i, _) in s.match_indices(']') {
-                if i > from {
-                    parts.push(&s[from..i]);
-                    from = i;
+        if !is_source(text, raw) {
+            // From an entity's replacement text: every part at the reference.
+            for t in cdata_parts(text) {
+                if self.stop_requested.get() {
+                    return;
                 }
+                self.character_data(t, raw, start, start_input);
             }
-            parts.push(&s[from..]);
-            parts
+            return;
         }
         // Line ends are normalised in `text`, not in `raw`; `]`s line up.
         let mut at = (start, start_input);
-        for (t, r) in parts(text).into_iter().zip(parts(raw)) {
+        for (t, r) in cdata_parts(text).into_iter().zip(cdata_parts(raw)) {
             if self.stop_requested.get() {
                 return;
             }
@@ -1400,12 +1513,7 @@ impl Shim {
     }
 
     fn character_data(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        let from_source = if raw.contains('\r') {
-            raw.replace("\r\n", "\n").replace('\r', "\n") == text
-        } else {
-            raw == text
-        };
-        if from_source {
+        if is_source(text, raw) {
             let bytes = raw.as_bytes();
             let (mut at, mut piece_start, mut i) = ((start, start_input), 0, 0);
             while i < bytes.len() {
@@ -2135,5 +2243,49 @@ mod layout {
         // SAFETY: Shim is repr(C) with a Cell<*mut c_void> (repr(transparent))
         // first, so reading a pointer at its address reads user_data.
         assert_eq!(unsafe { *raw }, sentinel);
+    }
+}
+
+/// Inputs whose cost could grow faster than their size, as in the core
+/// crate's tests/resource_tests.rs: the size took tens of seconds with the
+/// old code; the assertions check behaviour, not timing.
+#[cfg(test)]
+mod resources {
+    use super::*;
+
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn attlist(
+        _: *mut c_void,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: c_int,
+    ) {
+        COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[test]
+    fn one_attlist_declaring_many_attributes() {
+        // Each attribute's position was worked out from the declaration's
+        // start: 64,000 attributes took ~40 s.
+        let n = 64_000;
+        let mut doc = String::from("<!DOCTYPE r [<!ATTLIST r");
+        for i in 0..n {
+            doc.push_str(&format!("\n a{i} CDATA #IMPLIED"));
+        }
+        doc.push_str(">]><r/>");
+        // SAFETY: a parser created, used and freed here, with a valid
+        // buffer and a handler of the right type.
+        unsafe {
+            let p = XML_ParserCreate(ptr::null());
+            XML_SetAttlistDeclHandler(p, Some(attlist));
+            let status = XML_Parse(p, doc.as_ptr().cast(), doc.len() as c_int, 1);
+            assert_eq!(status, XML_STATUS_OK);
+            assert_eq!(XML_GetCurrentLineNumber(p), n as XML_Size + 1);
+            XML_ParserFree(p);
+        }
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), n);
     }
 }

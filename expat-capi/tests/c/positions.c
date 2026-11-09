@@ -122,6 +122,15 @@ int main(void) {
     target = stops[i];
     run("stop", doc, 4096);
   }
+  /* Within an entity's replacement text a stop stays at the reference. */
+  const char *ent =
+      "<!DOCTYPE r [<!ENTITY e 'a<x><?ep d?><!--ec--></x>b'><!ENTITY f '&e;'>]>\n"
+      "<r>&amp;&#65;<y/>&e;<z/>&f;</r>\n";
+  const char *entity_stops[] = {"y", "x", "ep", "ec", "/x", "z", "/y", "/z", "/r"};
+  for (int i = 0; i < 9; i++) {
+    target = entity_stops[i];
+    run("stop in an entity", ent, 4096);
+  }
   target = NULL;
   return 0;
 }

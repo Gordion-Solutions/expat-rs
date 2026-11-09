@@ -24,7 +24,9 @@ for repo in wayland wayland-protocols; do
 done
 
 (cd "$root" && cargo build -q --release -p expat-capi)
-target=${CARGO_TARGET_DIR:-$root/target}
+# cargo runs in $root, so a relative CARGO_TARGET_DIR is relative to it.
+target=${CARGO_TARGET_DIR:-target}
+case $target in /*) ;; *) target=$root/$target ;; esac
 src=$work/wayland/src
 extra=""
 [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"

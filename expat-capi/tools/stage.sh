@@ -6,7 +6,9 @@ set -e
 dir=${1:?usage: stage.sh <dir> [profile]}
 profile=${2:-release}
 root=$(cd "$(dirname "$0")/../.." && pwd)
-target=${CARGO_TARGET_DIR:-$root/target}
+# cargo runs in $root, so a relative CARGO_TARGET_DIR is relative to it.
+target=${CARGO_TARGET_DIR:-target}
+case $target in /*) ;; *) target=$root/$target ;; esac
 # Build first: cargo test doesn't update target/<profile>/, so copying
 # without building can stage a stale library.
 if [ "$profile" = release ]; then flag=--release; else flag="--profile $profile"; fi

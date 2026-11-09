@@ -1188,6 +1188,73 @@
 == CDATA in an entity's replacement text
   -> not well-formed (invalid token) @1:38
   -> not well-formed (invalid token) @1:38
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+-- stop at callback 1
+  <r> @4:0
+  start-cdata @4:3
+  (stopping)
+  [a] @4:3
+  -> parsing aborted @4:3
+-- stop at callback 2
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  (stopping)
+  -> parsing aborted @4:3
+-- stop at callback 3
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  (stopping)
+  -> parsing aborted @4:3
 == the default handler
   <r> @1:0
   [ab] @1:3
@@ -1264,6 +1331,73 @@
   [alm] @1:12
   [ost] @1:15
   -> unclosed CDATA section @1:18
+== a stray ]]> in content
+  <r> @1:0
+  [a] @1:3
+  [bc] @1:4
+  [d] @1:6
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [ab] @1:3
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  [\n] @1:5
+  [c] @2:0
+  [d] @2:1
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  [a] @1:3
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  [a] @1:3
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  [c] @1:3
+  [af] @1:4
+  [é] @1:6
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [ca] @1:3
+  [fé] @1:5
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  -> not well-formed (invalid token) @1:9
 == stopping in a CDATA callback
 -- stop at callback 1
   <r> @1:0
@@ -1291,6 +1425,29 @@
   [ stuff] @1:21
   (stopping)
   -> parsing aborted @1:27
+== stopping in the start handler at the end of a chunk, then more
+  start-cdata @1:3
+  (stopping)
+  call 1 -> 1 code 0 @1:12
+  call 2 -> 0 code 36 @1:12
+  call 3 -> 0 code 36 @1:12
+  start-cdata @1:3
+  (stopping)
+  [x] @1:12
+  call 1 -> 0 code 35 @1:13
+  call 2 -> 0 code 36 @1:13
+  call 3 -> 0 code 36 @1:13
+  start-cdata @1:3
+  (stopping)
+  end-cdata @1:12
+  call 1 -> 0 code 35 @1:12
+  call 2 -> 0 code 36 @1:12
+  call 3 -> 0 code 36 @1:12
+  [t] @1:3
+  (stopping)
+  call 1 -> 0 code 35 @1:4
+  call 2 -> 0 code 36 @1:4
+  call 3 -> 0 code 36 @1:4
 == UTF-16LE
   <r> @1:0
   start-cdata @1:3
