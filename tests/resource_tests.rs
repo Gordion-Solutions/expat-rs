@@ -83,6 +83,27 @@ fn huge_construct_streamed_in_tiny_chunks() {
 }
 
 #[test]
+fn utf16_streamed_two_bytes_at_a_time() {
+    // The buffer was measured in input bytes from its start on every feed:
+    // 400,000 characters of UTF-16 in 2-byte pieces took ~60 s.
+    let text = format!("<r a='{}'/>", "x".repeat(400_000));
+    let mut doc = vec![0xFF, 0xFE];
+    doc.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    let mut p = StreamParser::new();
+    let mut value_len = 0;
+    let mut on = |e: Event<'_>| {
+        if let Event::StartElement { attributes, .. } = e {
+            value_len = attributes[0].value.len();
+        }
+    };
+    for chunk in doc.chunks(2) {
+        p.feed(chunk, &mut on).unwrap();
+    }
+    p.finish(&mut on).unwrap();
+    assert_eq!(value_len, 400_000);
+}
+
+#[test]
 fn deferral_still_delivers_everything_in_order() {
     let doc = format!("<a><b/><!--{}--><c>t</c></a>", "y".repeat(100_000));
     let mut names = Vec::new();

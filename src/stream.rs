@@ -76,6 +76,9 @@ pub struct StreamParser<'l> {
     /// How much of `buf` has been measured in input bytes: (offset in
     /// `buf`, input bytes up to it), so events in order are measured once.
     measured: Cell<(usize, usize)>,
+    /// The same for the whole of `buf`, kept apart so that measuring the
+    /// buffer at each feed only measures what was added.
+    measured_end: Cell<(usize, usize)>,
     /// Nothing consumed yet, so the XML declaration may still come.
     at_start: bool,
     /// Whether input came as bytes (`feed`) or text (`feed_str`).
@@ -119,6 +122,7 @@ impl<'l> StreamParser<'l> {
             base: Position::start(),
             input_base: 0,
             measured: Cell::new((0, 0)),
+            measured_end: Cell::new((0, 0)),
             at_start: true,
             input: None,
             failed: None,
@@ -379,9 +383,13 @@ impl<'l> StreamParser<'l> {
     }
 
     /// The input held for the next attempt, in bytes as given (as libexpat
-    /// measures its buffer): `buf`, and bytes not yet decoded.
+    /// measures its buffer): `buf`, and bytes not yet decoded. Measured on
+    /// from the last measure, so feeding in small pieces stays linear.
     fn buffered_input(&self) -> usize {
-        self.decoder.input_len(&self.buf) + self.decoder.pending_len()
+        let (done, bytes) = self.measured_end.get();
+        let bytes = bytes + self.decoder.input_len(&self.buf[done..]);
+        self.measured_end.set((self.buf.len(), bytes));
+        bytes + self.decoder.pending_len()
     }
 
     /// Tokenise and handle as much of `buf` as is complete, then drop the
@@ -483,6 +491,10 @@ impl<'l> StreamParser<'l> {
                 // A character that isn't allowed can't be the result of
                 // truncation: report it now, as libexpat does.
                 Err(e @ XmlError::InvalidChar { .. }) => return Err(e.rebase(base)),
+                // Nor can a whole `]]>` in content (reported at its `>`).
+                Err(e) if self.buf.as_bytes()[..(e.position().byte_offset + 1).min(self.buf.len())].ends_with(b"]]>") => {
+                    return Err(e.rebase(base))
+                }
                 Err(e) if !last && e.position().byte_offset + LOOKAHEAD >= self.buf.len() => break,
                 Err(e) => return Err(e.rebase(base)),
             }
@@ -494,6 +506,7 @@ impl<'l> StreamParser<'l> {
         if let Some(end) = consumed {
             self.input_base = self.input_at(end.byte_offset);
             self.measured.set((0, 0));
+            self.measured_end.set((0, 0));
             self.base = end.rebase(base);
             self.buf.drain(..end.byte_offset);
             self.at_start = false;
