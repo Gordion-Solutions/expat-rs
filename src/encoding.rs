@@ -468,7 +468,9 @@ impl StreamDecoder {
         let kind = match p {
             [0xFE, 0xFF, ..] => utf16(true),
             [0xFF, 0xFE, ..] => utf16(false),
-            _ if p.len() < 4 && !last => return Ok(None),
+            // Two bytes tell UTF-16 (a zero byte) from 8-bit, except the
+            // start of a UTF-8 byte order mark, as libexpat decides.
+            _ if (p.len() < 2 || [0xEF, 0xBB, 0xBF].starts_with(p)) && !last => return Ok(None),
             [0x00, ..] => utf16(true),
             [_, 0x00, ..] => utf16(false),
             _ => {

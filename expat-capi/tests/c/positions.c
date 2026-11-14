@@ -132,5 +132,17 @@ int main(void) {
     run("stop in an entity", ent, 4096);
   }
   target = NULL;
+
+  /* A first chunk shorter than four bytes is parsed at once. */
+  const char *shorts[] = {"<a>", "<a", "<", "\xEF\xBB", "<?x"};
+  for (int i = 0; i < 5; i++) {
+    printf("== first chunk of %d bytes\n", (int)strlen(shorts[i]));
+    p = XML_ParserCreate(NULL);
+    XML_SetElementHandler(p, start, end);
+    XML_Parse(p, shorts[i], (int)strlen(shorts[i]), XML_FALSE);
+    printf("  after it @%lu:%lu byte=%ld\n", XML_GetCurrentLineNumber(p), XML_GetCurrentColumnNumber(p),
+           (long)XML_GetCurrentByteIndex(p));
+    XML_ParserFree(p);
+  }
   return 0;
 }

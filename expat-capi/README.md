@@ -31,7 +31,7 @@ own `xmlwf` uses (`XML_ParserCreate`, `XML_ParserCreateNS`,
 `XML_DefaultCurrent`, `XML_GetCurrentByteCount`, `XML_GetIdAttributeIndex`,
 `XML_UseParserAsHandlerArg`, `XML_SetCdataSectionHandler`,
 `XML_SetDoctypeDeclHandler`, and the 2.7.2 alloc-tracker settings, which are
-accepted and have no effect). Like libexpat, it applies the Fourth Edition's
+accepted and have no effect), and `XML_ParserReset`. Like libexpat, it applies the Fourth Edition's
 name rules and accepts some things XML 1.0 forbids (any version number made
 of `[A-Za-z0-9._-]`; an encoding declaration after a UTF-8 byte order mark
 naming another encoding), through expat-rs's `with_libexpat_leniency`. Handlers may call back into the parser

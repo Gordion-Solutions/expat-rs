@@ -80,3 +80,8 @@ fn android_consumers_match_libexpat() {
 fn unknown_encodings_match_libexpat() {
     check_probe("encodings");
 }
+
+#[test]
+fn parser_reset_matches_libexpat() {
+    check_probe("reset");
+}

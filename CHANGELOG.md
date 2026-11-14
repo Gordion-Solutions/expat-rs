@@ -67,7 +67,9 @@ benchmarked against libexpat.
 - `StreamParser`, as libexpat: a `]]>` in content is an error as soon as
   it is fed, and the text running into it (after its last line end) is
   not delivered first. Input forced to UTF-16 without a byte order mark
-  takes its byte order from the first character.
+  takes its byte order from the first character. `StreamDecoder` chooses
+  between UTF-16 and 8-bit input from the first two bytes (it waited for
+  four), so a first chunk of two or three bytes is parsed at once.
 - Minimum Rust version 1.83, the version AOSP builds with.
 
 ### Performance

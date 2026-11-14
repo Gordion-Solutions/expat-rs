@@ -1807,6 +1807,33 @@ pub unsafe extern "C" fn XML_ParserFree(parser: XML_Parser) {
     }
 }
 
+/// Make the parser as new, as from `XML_ParserCreate*` with `encoding` and
+/// its original memory suite and namespace separator: handlers (but the
+/// unknown-encoding handler, which libexpat keeps), user data and every
+/// setting cleared, an unknown encoding's data released. As in
+/// libexpat, a parser from `XML_ExternalEntityParserCreate` can't be reset;
+/// nor can one from inside its own handler (libexpat leaves that undefined;
+/// here it would free the parser that is calling the handler).
+#[no_mangle]
+pub unsafe extern "C" fn XML_ParserReset(parser: XML_Parser, encoding: *const XML_Char) -> XML_Bool {
+    let fresh = {
+        // SAFETY: see `shim`; encoding is null or a valid C string.
+        let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+        if p.role != Role::Root || p.core.try_borrow_mut().is_err() {
+            return XML_FALSE;
+        }
+        let fresh = Shim::new(unsafe { c_arg(encoding) }, Some(p.memsuite), p.ns_sep);
+        // libexpat keeps the unknown-encoding handler and its data.
+        fresh.unknown_encoding.set(p.unknown_encoding.get());
+        fresh
+    };
+    // SAFETY: the parser came from XML_ParserCreate_MM and isn't in use (it
+    // isn't parsing, and no reference to it is held here): the old state is
+    // dropped in place and the fresh one written over it.
+    unsafe { *parser = fresh };
+    XML_TRUE
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn XML_Parse(parser: XML_Parser, s: *const c_char, len: c_int, is_final: c_int) -> XML_Status {
     // SAFETY: see `shim`.
@@ -1870,6 +1897,12 @@ pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool)
             p.error.set(XML_ERROR_SUSPEND_PE);
             XML_STATUS_ERROR
         }
+        // Between XML_Parse calls, not from a handler: libexpat finishes
+        // the parse there and then, so the next call is XML_ERROR_FINISHED.
+        Status::Parsing if p.core.try_borrow_mut().is_ok() => {
+            p.status.set(Status::Finished);
+            XML_STATUS_OK
+        }
         Status::Parsing => {
             p.stop_error.set(XML_ERROR_ABORTED);
             p.stop_requested.set(true);
@@ -1909,7 +1942,8 @@ pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> XML_S
 pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> XML_Index {
     // In bytes of input, before decoding, as libexpat counts.
     // SAFETY: see `shim`.
-    unsafe { shim(parser) }.map_or(-1, |p| p.input_pos.get() as XML_Index)
+    // -1 before any input, as libexpat.
+    unsafe { shim(parser) }.map_or(-1, |p| if p.status.get() == Status::NotStarted { -1 } else { p.input_pos.get() as XML_Index })
 }
 
 #[no_mangle]
