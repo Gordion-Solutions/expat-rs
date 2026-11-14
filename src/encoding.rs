@@ -114,7 +114,7 @@ fn unknown_encoding(name: &str, pos: Position) -> XmlError {
 
 /// As `choose_8bit`, but an encoding name it doesn't support comes back as
 /// `Err((name, where it is declared))` for the caller to resolve (see
-/// `ByteMap`).
+/// `EncodingMap`).
 ///
 /// `lenient_bom`: after a UTF-8 byte order mark, follow a declaration naming
 /// another encoding (not UTF-16) instead of rejecting it; the caller then

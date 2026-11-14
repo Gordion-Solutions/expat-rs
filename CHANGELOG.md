@@ -38,6 +38,13 @@ benchmarked against libexpat.
 - `StreamParser::with_cdata_pieces`: CDATA sections as
   `Event::StartCData`, `Event::CData` pieces as the input arrives, and
   `Event::EndCData`, as libexpat delivers them.
+- `StreamParser::with_unknown_encoding`: other encodings through an
+  `EncodingMap`, single-byte or with 2–4 byte sequences decoded by a
+  converter (libexpat's `XML_Encoding`).
+- `with_libexpat_leniency` (on `Parser` and `StreamParser`): accept what
+  libexpat accepts beyond XML 1.0: any version number made of
+  `[A-Za-z0-9._-]`, and an encoding declaration after a UTF-8 byte order
+  mark naming another encoding.
 
 ### Security and robustness
 - Linear time on all inputs: fixed a stack overflow on deeply nested
