@@ -75,3 +75,8 @@ fn cdata_in_pieces_matches_libexpat() {
 fn android_consumers_match_libexpat() {
     check_probe("android_consumers");
 }
+
+#[test]
+fn unknown_encodings_match_libexpat() {
+    check_probe("encodings");
+}

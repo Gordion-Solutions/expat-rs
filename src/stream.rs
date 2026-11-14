@@ -313,7 +313,11 @@ impl<'l> StreamParser<'l> {
     /// at its position in the document.
     fn decode(&mut self, bytes: &[u8], last: bool, handler: &mut impl FnMut(Located<'_>)) -> Result<()> {
         let unknown = &mut self.unknown_encoding;
-        match self.decoder.decode_with(bytes, last, &mut self.buf, &mut |name| unknown.as_mut().and_then(|f| f(name))) {
+        let decoded = self.decoder.decode_with(bytes, last, &mut self.buf, &mut |name| unknown.as_mut().and_then(|f| f(name)));
+        // Bytes the decoder dropped ahead of the text still count in input
+        // offsets, as libexpat counts them.
+        self.input_base += std::mem::take(&mut self.decoder.skipped);
+        match decoded {
             Err(XmlError::Encoding {
                 kind: kind @ (ErrorKind::InvalidToken | ErrorKind::PartialChar | ErrorKind::UnclosedToken),
                 reason,

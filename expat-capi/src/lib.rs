@@ -655,7 +655,9 @@ fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *
         -4..=-2 => MapEntry::Lead((-entry) as u8),
         _ => u32::try_from(entry).ok().and_then(char::from_u32).map_or(MapEntry::Invalid, MapEntry::Char),
     });
-    if entries.iter().any(|e| matches!(e, MapEntry::Lead(_))) {
+    // The converter goes with the map whenever it has something to do,
+    // decoding sequences or releasing the data when the parser is done.
+    if converter.release.is_some() || entries.iter().any(|e| matches!(e, MapEntry::Lead(_))) {
         Some(EncodingMap::multi_byte(entries, move |sequence| converter.convert(sequence)))
     } else {
         Some(EncodingMap::single_byte(entries.map(|e| match e {
@@ -681,13 +683,16 @@ unsafe impl Send for Converter {}
 impl Converter {
     /// The character a multi-byte sequence stands for. libexpat accepts
     /// only results up to U+FFFF from `convert`; anything else (or -1) is an
-    /// invalid sequence.
+    /// invalid sequence. So is an ASCII result: libexpat takes a sequence
+    /// as data whatever it decodes to, so one decoding to `<`, a quote or a
+    /// keyword's letter never acts as markup there; once decoded, expat-rs
+    /// couldn't tell it from markup, so it refuses it instead.
     fn convert(&self, sequence: &[u8]) -> Option<char> {
         let convert = self.convert?;
         // SAFETY: `convert` gets the data the handler gave it and a pointer
         // to a whole sequence of the length its map entry declared.
         let c = unsafe { convert(self.data, sequence.as_ptr().cast()) };
-        u32::try_from(c).ok().filter(|&c| c <= 0xFFFF).and_then(char::from_u32)
+        u32::try_from(c).ok().filter(|&c| (0x80..=0xFFFF).contains(&c)).and_then(char::from_u32)
     }
 }
 
@@ -902,8 +907,8 @@ const XML_SYNTAX_CHARS: &[u8] =
 
 /// Whether libexpat would accept an unknown-encoding handler's map: each
 /// of XML's syntax characters is its own byte and no other byte stands for
-/// one; multi-byte sequences (entries -2 to -4, the sequence length) only
-/// with a `convert` callback, and nothing below -4. Other maps are an
+/// one; nothing maps above U+FFFF; multi-byte sequences (entries -2 to -4,
+/// the sequence length) only with a `convert` callback, and nothing below -4. Other maps are an
 /// unknown encoding. (Found by black-box tests of libexpat: remapping `$`
 /// or a control byte is accepted, `A`, `<` or LF is not.)
 fn acceptable_map(map: &[c_int; 256], has_convert: bool) -> bool {
@@ -916,7 +921,8 @@ fn acceptable_map(map: &[c_int; 256], has_convert: bool) -> bool {
         } else if is_syntax(byte) {
             entry == byte // a syntax character must be its own byte
         } else {
-            !is_syntax(entry) // and no other byte may stand for one
+            // No other byte may stand for one, nor for anything above U+FFFF.
+            !is_syntax(entry) && entry <= 0xFFFF
         }
     })
 }

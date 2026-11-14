@@ -280,6 +280,10 @@ pub struct StreamDecoder {
     /// Follow an encoding declaration after a UTF-8 byte order mark, as
     /// libexpat does (see `StreamParser::with_libexpat_leniency`).
     pub(crate) lenient_bom: bool,
+    /// Input bytes dropped ahead of the text (a UTF-8 byte order mark before
+    /// a followed declaration of another encoding) that the caller hasn't
+    /// yet counted: it takes them with `std::mem::take`.
+    pub(crate) skipped: usize,
 }
 
 impl StreamDecoder {
@@ -487,6 +491,7 @@ impl StreamDecoder {
                 if p.starts_with(&[0xEF, 0xBB, 0xBF]) && !matches!(kind, Kind::Bit8(Kind8::Utf8)) {
                     self.pending.drain(..3);
                     self.offset += 3;
+                    self.skipped += 3;
                 }
                 kind
             }

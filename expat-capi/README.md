@@ -125,3 +125,6 @@ Not yet run on a physical device.
   and positions follow. Same verdict in every case.
 - Byte indexes in documents in multi-byte unknown encodings count each
   multi-byte sequence as one byte.
+- A multi-byte sequence whose `convert` result is an ASCII character is an
+  invalid token. libexpat takes it as data (a sequence decoding to `<` is
+  text there); once decoded, expat-rs couldn't tell it from markup.
