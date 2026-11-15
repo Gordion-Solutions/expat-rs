@@ -1,0 +1,195 @@
+== public identifiers (no default, pieces 5)
+  9 doctype d sys=[d.dtd] pub=[a b c] 1
+  15 notation n1 sys=[-] pub=[x y]
+  23 notation n2 sys=[n2.sys] pub=[p q]
+  29 entity u value=- sys=[u.bin] pub=[-] ndata=n1
+  37 entity ext value=- sys=[ext.xml] pub=[P Q] ndata=-
+  46 entity %pe value=- sys=[pe.dtd] pub=[R] ndata=-
+  46 enddoctype
+  46 <d>
+  46 </d>
+== internal entities, non-expanding default handler (default, pieces 4)
+  3 doctype d sys=[-] pub=[-] 1
+  9 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  12 entity j value=[J] sys=[-] pub=[-] ndata=-
+  18 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  19 enddoctype
+  22 <d a=J>
+  22 skipped i
+  23 text [>]
+  25 text [A]
+  25 external x sys=[x.xml] pub=[-]
+  26 <e>
+  27 skipped j
+  28 </e>
+  29 </d>
+== predefined entities declared again (expand, pieces 6)
+  2 doctype d sys=[-] pub=[-] 1
+  2 default [\n]
+  4 default [gt]
+  5 default ["&#62;"]
+  5 default [\n]
+  8 default [lt]
+  9 default ["&#38;#60;"]
+  9 default [\n]
+  12 default [amp]
+  15 default ['&#38;#38;']
+  15 default [\n]
+  16 default [apos]
+  17 default ["'"]
+  17 default [\n]
+  19 default [quot]
+  22 default ['other']
+  22 default [\n]
+  24 entity x value=[after] sys=[-] pub=[-] ndata=-
+  24 default [\n]
+  24 enddoctype
+  25 <d>
+  26 text [>]
+  26 text [<]
+  27 text [&]
+  28 text [']
+  29 text ["]
+  30 text [after]
+  30 </d>
+== after an internal parameter entity reference (expand, pieces 7)
+  3 xmldecl 1.0 - -1
+  3 default [\n]
+  4 doctype d sys=[-] pub=[-] 1
+  5 default [\n]
+  7 elementdecl d
+  7 default [\n]
+  16 entity %pe1 value=[<!ATTLIST d a1 CDATA "v1">] sys=[-] pub=[-] ndata=-
+  16 default [\n]
+  16 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  16 default [\n]
+  17 default [%pe1;]
+  17 default [\n]
+  18 default [<!ENTITY]
+  18 default [ ]
+  19 default [g2]
+  19 default [ ]
+  20 default ['two']
+  20 default [>]
+  20 default [\n]
+  21 default [<!ATTLIST]
+  21 default [ ]
+  21 default [d]
+  21 default [ ]
+  22 default [a2]
+  22 default [ ]
+  23 default [CDATA]
+  23 default [ ]
+  23 default ["v2"]
+  23 default [>]
+  24 default [\n]
+  27 notation n sys=[n] pub=[-]
+  27 default [\n]
+  30 elementdecl e
+  30 default [\n]
+  31 comment  c 
+  31 default [\n]
+  32 enddoctype
+  32 default [\n]
+  32 <d>
+  33 text [one]
+  33 skipped g2
+  34 </d>
+== whitespace in and around the DOCTYPE (default, pieces 1)
+  31 xmldecl 1.0 - -1
+  31 default [\n\n]
+  35 doctype d sys=[-] pub=[-] 1
+  36 default [\n]
+  37 default [\n]
+  38 default [ ]
+  39 default [ ]
+  40 default [ ]
+  41 default [ ]
+  57 elementdecl d
+  58 default [ ]
+  59 default [ ]
+  60 default [ ]
+  61 default [\n]
+  62 default [\t]
+  98 attlist d a CDATA - 0
+  98 default [\n\n\n  ]
+  120 comment  comment 
+  120 default [  \n ]
+  120 enddoctype
+  120 default [  ]
+  121 default [\n]
+  122 default [\n]
+  126 <d>
+  126 text [\n]
+  127 text [ ]
+  128 text [ ]
+  129 text [t]
+  130 text [e]
+  131 text [x]
+  132 text [t]
+  133 text [\n]
+  137 </d>
+  138 default [\n]
+  139 default [\n]
+== whitespace in and around the DOCTYPE (default, pieces 3)
+  7 xmldecl 1.0 - -1
+  7 default [\n\n]
+  11 doctype d sys=[-] pub=[-] 1
+  12 default [\n\n ]
+  13 default [   ]
+  19 elementdecl d
+  19 default [  ]
+  20 default [ \n\t]
+  32 attlist d a CDATA - 0
+  32 default [\n\n\n  ]
+  39 comment  comment 
+  39 default [  \n ]
+  39 enddoctype
+  39 default [ ]
+  40 default [ \n\n]
+  41 <d>
+  42 text [\n]
+  42 text [  ]
+  43 text [tex]
+  44 text [t]
+  44 text [\n]
+  45 </d>
+  46 default [\n\n]
+== whitespace in and around the DOCTYPE (default, pieces 7)
+  3 xmldecl 1.0 - -1
+  3 default [\n\n]
+  5 doctype d sys=[-] pub=[-] 1
+  5 default [\n\n    ]
+  8 elementdecl d
+  8 default [   \n\t]
+  14 attlist d a CDATA - 0
+  14 default [\n\n\n  ]
+  18 comment  comment 
+  18 default [  \n ]
+  18 enddoctype
+  18 default [  \n\n]
+  18 <d>
+  18 text [\n]
+  18 text [  text]
+  19 text [\n]
+  19 </d>
+  19 default [\n\n]
+== whitespace in and around the DOCTYPE (expand, pieces 7)
+  3 xmldecl 1.0 - -1
+  3 default [\n\n]
+  5 doctype d sys=[-] pub=[-] 1
+  5 default [\n\n    ]
+  8 elementdecl d
+  8 default [   \n\t]
+  14 attlist d a CDATA - 0
+  14 default [\n\n\n  ]
+  18 comment  comment 
+  18 default [  \n ]
+  18 enddoctype
+  18 default [  \n\n]
+  18 <d>
+  18 text [\n]
+  18 text [  text]
+  19 text [\n]
+  19 </d>
+  19 default [\n\n]

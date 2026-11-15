@@ -328,14 +328,16 @@ impl<'l> State<'l> {
             || (!dtd.external_subset && !has_pe_refs);
         // Parameter entities are not read yet, so per §5.1 entity and
         // attribute-list declarations after an unread one are not
-        // processed. Other declarations still are.
+        // processed, unless the document is standalone="yes", when they
+        // MUST be. Other declarations always are.
         let mut after_unread_pe = false;
+        let standalone = self.standalone == Some(true);
         let doctype_span = self.span;
         for (decl, (start, end)) in dtd.decls.into_iter().zip(dtd.spans) {
             self.span = Span { start, end };
             match decl {
                 DtdDecl::PeRef(name) => {
-                    after_unread_pe = true;
+                    after_unread_pe = !standalone;
                     self.emit(Event::ParameterEntityRef(Cow::Owned(name)), out)?;
                 }
                 DtdDecl::Pi { target, body } => {

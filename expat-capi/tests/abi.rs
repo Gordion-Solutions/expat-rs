@@ -103,3 +103,17 @@ fn unknown_encodings_match_libexpat() {
 fn parser_reset_matches_libexpat() {
     check_probe("reset");
 }
+
+#[test]
+fn declarations_match_libexpat() {
+    check_probe("declarations");
+}
+
+/// DTD declarations fed in small pieces: libexpat reports each as it
+/// completes, expat-capi when the internal subset closes (see
+/// tests/c/dtd_pieces.c and the README).
+#[test]
+#[ignore = "declarations in an internal subset fed in pieces are reported when it closes"]
+fn dtd_in_pieces_matches_libexpat() {
+    check_probe("dtd_pieces");
+}

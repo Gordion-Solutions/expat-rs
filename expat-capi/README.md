@@ -62,7 +62,9 @@ LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
 what libexpat 2.8.2 prints (`tests/c/*.expected`, recorded by
 `tools/regen_expected.sh`): callbacks and their arguments, line, column and
 byte positions, error codes, messages and positions, stopping, buffers,
-encodings, content models, settings. `tests/c/android_consumers.c` calls the
+encodings, content models, settings, and DTD declarations with every
+handler and the default handler set at once (`tests/c/declarations.c`).
+`tests/c/android_consumers.c` calls the
 API the way Android's users of libexpat do (libcore's ExpatParser, Skia,
 aapt2 and aapt, frameworks/av, audio_route, the wayland scanner), following
 their AOSP source.
@@ -118,6 +120,17 @@ Not yet run on a physical device.
 - `XML_StopParser(parser, XML_TRUE)` (suspend) isn't supported;
   `XML_ResumeParser` isn't exported.
 - `XML_GetInputContext` returns NULL.
+- Parameter entity references in the internal subset aren't expanded,
+  even with parameter entity parsing on: an external one goes to the
+  external entity handler (whose parser doesn't read it), and declarations
+  after one are treated as libexpat treats them after an unread one.
+- When the DOCTYPE arrives in pieces, its declarations are reported once
+  the internal subset is complete, and reparse deferral then holds the
+  events after it a little longer; libexpat reports each declaration (and
+  the default handler's text between them) as it completes. The events
+  are the same. `tests/c/dtd_pieces.c` records the difference.
+- A `\r\n` after the root element split between two calls reaches the
+  default handler as one piece; libexpat delivers `\r` and `\n` apart.
 - For about 1050 of the suite's malformed documents (mostly in DTDs) the
   error is classified or placed differently: libexpat's grammar reports
   "syntax error" where expat-rs finds an invalid token and the reverse,

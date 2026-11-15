@@ -1,0 +1,921 @@
+== public identifiers (no default, pieces 1048576)
+  0 doctype d sys=[d.dtd] pub=[a b c] 1
+  0 notation n1 sys=[-] pub=[x y]
+  0 notation n2 sys=[n2.sys] pub=[p q]
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n1
+  0 entity ext value=- sys=[ext.xml] pub=[P Q] ndata=-
+  0 entity %pe value=- sys=[pe.dtd] pub=[R] ndata=-
+  0 enddoctype
+  0 <d>
+  0 </d>
+== public identifiers (default, pieces 1048576)
+  0 doctype d sys=[d.dtd] pub=[a b c] 1
+  0 default [\n]
+  0 notation n1 sys=[-] pub=[x y]
+  0 default [\n]
+  0 notation n2 sys=[n2.sys] pub=[p q]
+  0 default [\n]
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n1
+  0 default [\n]
+  0 entity ext value=- sys=[ext.xml] pub=[P Q] ndata=-
+  0 default [\n]
+  0 entity %pe value=- sys=[pe.dtd] pub=[R] ndata=-
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 </d>
+== public identifiers (no default, PEs, pieces 1048576)
+  0 doctype d sys=[d.dtd] pub=[a b c] 1
+  0 notation n1 sys=[-] pub=[x y]
+  0 notation n2 sys=[n2.sys] pub=[p q]
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n1
+  0 entity ext value=- sys=[ext.xml] pub=[P Q] ndata=-
+  0 entity %pe value=- sys=[pe.dtd] pub=[R] ndata=-
+  0 external (dtd) sys=[d.dtd] pub=[a b c]
+  0 enddoctype
+  0 <d>
+  0 </d>
+== tab in a public identifier (no default, pieces 1048576)
+  -> illegal character(s) in public id @1:21
+== internal entities, non-expanding default handler (default, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  0 entity j value=[J] sys=[-] pub=[-] ndata=-
+  0 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  0 enddoctype
+  0 <d a=J>
+  0 skipped i
+  0 text [>]
+  0 text [A]
+  0 external x sys=[x.xml] pub=[-]
+  0 <e>
+  0 skipped j
+  0 </e>
+  0 </d>
+== internal entities, non-expanding default handler (default, no skipped or external handler, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  0 entity j value=[J] sys=[-] pub=[-] ndata=-
+  0 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  0 enddoctype
+  0 <d a=J>
+  0 default [&i;]
+  0 text [>]
+  0 text [A]
+  0 default [&x;]
+  0 <e>
+  0 default [&j;]
+  0 </e>
+  0 </d>
+== internal entities, expanding default handler (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  0 entity j value=[J] sys=[-] pub=[-] ndata=-
+  0 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  0 enddoctype
+  0 <d a=J>
+  0 text [I]
+  0 <e>
+  0 </e>
+  0 text [J]
+  0 text [>]
+  0 text [A]
+  0 external x sys=[x.xml] pub=[-]
+  0 <e>
+  0 text [J]
+  0 </e>
+  0 </d>
+== internal entities, default handler set to NULL (default set to NULL, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  0 entity j value=[J] sys=[-] pub=[-] ndata=-
+  0 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  0 enddoctype
+  0 <d a=J>
+  0 skipped i
+  0 text [>]
+  0 text [A]
+  0 external x sys=[x.xml] pub=[-]
+  0 <e>
+  0 skipped j
+  0 </e>
+  0 </d>
+== internal entities, default handler set to NULL (default set to NULL, no skipped or external handler, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity i value=[I<e/>&j;] sys=[-] pub=[-] ndata=-
+  0 entity j value=[J] sys=[-] pub=[-] ndata=-
+  0 entity x value=- sys=[x.xml] pub=[-] ndata=-
+  0 enddoctype
+  0 <d a=J>
+  0 text [>]
+  0 text [A]
+  0 <e>
+  0 </e>
+  0 </d>
+== predefined entities declared again (no default, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity x value=[after] sys=[-] pub=[-] ndata=-
+  0 enddoctype
+  0 <d>
+  0 text [>]
+  0 text [<]
+  0 text [&]
+  0 text [']
+  0 text ["]
+  0 text [after]
+  0 </d>
+== predefined entities declared again (default, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 default [gt]
+  0 default ["&#62;"]
+  0 default [\n]
+  0 default [lt]
+  0 default ["&#38;#60;"]
+  0 default [\n]
+  0 default [amp]
+  0 default ['&#38;#38;']
+  0 default [\n]
+  0 default [apos]
+  0 default ["'"]
+  0 default [\n]
+  0 default [quot]
+  0 default ['other']
+  0 default [\n]
+  0 entity x value=[after] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 text [>]
+  0 text [<]
+  0 text [&]
+  0 text [']
+  0 text ["]
+  0 skipped x
+  0 </d>
+== predefined entities declared again (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 default [gt]
+  0 default ["&#62;"]
+  0 default [\n]
+  0 default [lt]
+  0 default ["&#38;#60;"]
+  0 default [\n]
+  0 default [amp]
+  0 default ['&#38;#38;']
+  0 default [\n]
+  0 default [apos]
+  0 default ["'"]
+  0 default [\n]
+  0 default [quot]
+  0 default ['other']
+  0 default [\n]
+  0 entity x value=[after] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 text [>]
+  0 text [<]
+  0 text [&]
+  0 text [']
+  0 text ["]
+  0 text [after]
+  0 </d>
+== after an internal parameter entity reference (no default, pieces 1048576)
+  0 xmldecl 1.0 - -1
+  0 doctype d sys=[-] pub=[-] 1
+  0 elementdecl d
+  0 entity %pe1 value=[<!ATTLIST d a1 CDATA "v1">] sys=[-] pub=[-] ndata=-
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 notation n sys=[n] pub=[-]
+  0 elementdecl e
+  0 comment  c 
+  0 enddoctype
+  0 <d>
+  0 text [one]
+  0 skipped g2
+  0 </d>
+== after an internal parameter entity reference (default, pieces 1048576)
+  0 xmldecl 1.0 - -1
+  0 default [\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 elementdecl d
+  0 default [\n]
+  0 entity %pe1 value=[<!ATTLIST d a1 CDATA "v1">] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [%pe1;]
+  0 default [\n]
+  0 default [<!ENTITY]
+  0 default [ ]
+  0 default [g2]
+  0 default [ ]
+  0 default ['two']
+  0 default [>]
+  0 default [\n]
+  0 default [<!ATTLIST]
+  0 default [ ]
+  0 default [d]
+  0 default [ ]
+  0 default [a2]
+  0 default [ ]
+  0 default [CDATA]
+  0 default [ ]
+  0 default ["v2"]
+  0 default [>]
+  0 default [\n]
+  0 notation n sys=[n] pub=[-]
+  0 default [\n]
+  0 elementdecl e
+  0 default [\n]
+  0 comment  c 
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 skipped g1
+  0 skipped g2
+  0 </d>
+== after an internal parameter entity reference (expand, pieces 1048576)
+  0 xmldecl 1.0 - -1
+  0 default [\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 elementdecl d
+  0 default [\n]
+  0 entity %pe1 value=[<!ATTLIST d a1 CDATA "v1">] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [%pe1;]
+  0 default [\n]
+  0 default [<!ENTITY]
+  0 default [ ]
+  0 default [g2]
+  0 default [ ]
+  0 default ['two']
+  0 default [>]
+  0 default [\n]
+  0 default [<!ATTLIST]
+  0 default [ ]
+  0 default [d]
+  0 default [ ]
+  0 default [a2]
+  0 default [ ]
+  0 default [CDATA]
+  0 default [ ]
+  0 default ["v2"]
+  0 default [>]
+  0 default [\n]
+  0 notation n sys=[n] pub=[-]
+  0 default [\n]
+  0 elementdecl e
+  0 default [\n]
+  0 comment  c 
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 text [one]
+  0 skipped g2
+  0 </d>
+== after an external parameter entity reference (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity %ext value=- sys=[ext.dtd] pub=[-] ndata=-
+  0 default [\n]
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [%ext;]
+  0 default [\n]
+  0 default [<!ENTITY]
+  0 default [ ]
+  0 default [g2]
+  0 default [ ]
+  0 default ['two']
+  0 default [>]
+  0 default [\n]
+  0 default [<!ATTLIST]
+  0 default [ ]
+  0 default [d]
+  0 default [ ]
+  0 default [a2]
+  0 default [ ]
+  0 default [CDATA]
+  0 default [ ]
+  0 default ['v2']
+  0 default [>]
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 text [one]
+  0 skipped g2
+  0 </d>
+== after an external parameter entity reference (expand, PEs, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity %ext value=- sys=[ext.dtd] pub=[-] ndata=-
+  0 default [\n]
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 external (dtd) sys=[ext.dtd] pub=[-]
+  0 default [\n]
+  0 default [<!ENTITY]
+  0 default [ ]
+  0 default [g2]
+  0 default [ ]
+  0 default ['two']
+  0 default [>]
+  0 default [\n]
+  0 default [<!ATTLIST]
+  0 default [ ]
+  0 default [d]
+  0 default [ ]
+  0 default [a2]
+  0 default [ ]
+  0 default [CDATA]
+  0 default [ ]
+  0 default ['v2']
+  0 default [>]
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 text [one]
+  0 skipped g2
+  0 </d>
+== undeclared parameter entity, standalone (no default, pieces 1048576)
+  0 xmldecl 1.0 - 1
+  0 doctype d sys=[-] pub=[-] 1
+  0 elementdecl d
+  0 entity %paaa value=[<!ATTLIST d att CDATA #IMPLIED>] sys=[-] pub=[-] ndata=-
+  0 entity aaa value=[aString] sys=[-] pub=[-] ndata=-
+  0 enddoctype
+  0 <d>
+  0 text [aString]
+  0 </d>
+== undeclared parameter entity, standalone (expand, pieces 1048576)
+  0 xmldecl 1.0 - 1
+  0 default [\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 elementdecl d
+  0 default [\n]
+  0 default [%paaa;]
+  0 default [\n]
+  0 entity %paaa value=[<!ATTLIST d att CDATA #IMPLIED>] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 entity aaa value=[aString] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 text [aString]
+  0 </d>
+== parameter entity, standalone='no' (expand, pieces 1048576)
+  0 xmldecl 1.0 - 0
+  0 default [\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity %pe1 value=[<!ENTITY g0 "zero">] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [%pe1;]
+  0 default [\n]
+  0 default [<!ENTITY]
+  0 default [ ]
+  0 default [g1]
+  0 default [ ]
+  0 default ['one']
+  0 default [>]
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d>
+  0 skipped g0
+  0 skipped g1
+  0 </d>
+== parameter entity, standalone='yes' (expand, pieces 1048576)
+  0 xmldecl 1.0 - 1
+  0 default [\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity %pe1 value=[<!ENTITY g0 "zero">] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [%pe1;]
+  0 default [\n]
+  0 entity g1 value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 attlist d a CDATA v 0
+  0 default [\n]
+  0 enddoctype
+  0 default [\n]
+  0 <d a=v>
+  -> undefined entity @8:3
+== entities declared twice (no default, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 entity e value=[first] sys=[-] pub=[-] ndata=-
+  0 entity %p value=[one] sys=[-] pub=[-] ndata=-
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n
+  0 entity %q value=- sys=[q.dtd] pub=[-] ndata=-
+  0 enddoctype
+  0 <d>
+  0 text [first]
+  0 </d>
+== entities declared twice (default, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity e value=[first] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [e]
+  0 default ["second"]
+  0 default [\n]
+  0 entity %p value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [p]
+  0 default ['two']
+  0 default [\n]
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n
+  0 default [\n]
+  0 default [u]
+  0 default ['v.bin']
+  0 default [>]
+  0 default [\n]
+  0 default [e]
+  0 default ['third']
+  0 default [\n]
+  0 default [u]
+  0 default ['pp  q']
+  0 default ['w.bin']
+  0 default [>]
+  0 default [\n]
+  0 default [u]
+  0 default ['x.bin']
+  0 default [n]
+  0 default [\n]
+  0 default [u]
+  0 default ['pp']
+  0 default ['y.bin']
+  0 default [n]
+  0 default [\n]
+  0 default [p]
+  0 default ['p.dtd']
+  0 default [>]
+  0 default [\n]
+  0 entity %q value=- sys=[q.dtd] pub=[-] ndata=-
+  0 default [\n]
+  0 default [q]
+  0 default ['qq']
+  0 default ['q2.dtd']
+  0 default [>]
+  0 default [\n]
+  0 default [lt]
+  0 default ['lt.txt']
+  0 default [>]
+  0 default [\n]
+  0 default [gt]
+  0 default ['g']
+  0 default ['gt.txt']
+  0 default [n]
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 skipped e
+  0 </d>
+== entities declared twice (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 entity e value=[first] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [e]
+  0 default ["second"]
+  0 default [\n]
+  0 entity %p value=[one] sys=[-] pub=[-] ndata=-
+  0 default [\n]
+  0 default [p]
+  0 default ['two']
+  0 default [\n]
+  0 entity u value=- sys=[u.bin] pub=[-] ndata=n
+  0 default [\n]
+  0 default [u]
+  0 default ['v.bin']
+  0 default [>]
+  0 default [\n]
+  0 default [e]
+  0 default ['third']
+  0 default [\n]
+  0 default [u]
+  0 default ['pp  q']
+  0 default ['w.bin']
+  0 default [>]
+  0 default [\n]
+  0 default [u]
+  0 default ['x.bin']
+  0 default [n]
+  0 default [\n]
+  0 default [u]
+  0 default ['pp']
+  0 default ['y.bin']
+  0 default [n]
+  0 default [\n]
+  0 default [p]
+  0 default ['p.dtd']
+  0 default [>]
+  0 default [\n]
+  0 entity %q value=- sys=[q.dtd] pub=[-] ndata=-
+  0 default [\n]
+  0 default [q]
+  0 default ['qq']
+  0 default ['q2.dtd']
+  0 default [>]
+  0 default [\n]
+  0 default [lt]
+  0 default ['lt.txt']
+  0 default [>]
+  0 default [\n]
+  0 default [gt]
+  0 default ['g']
+  0 default ['gt.txt']
+  0 default [n]
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 text [first]
+  0 </d>
+== attribute-list declarations (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 default [\n]
+  0 default [\n]
+  0 attlist d a CDATA - 0
+  0 default [\n]
+  0 attlist d b CDATA x 0
+  0 attlist d c (p|q|r) p 0
+  0 default [\n]
+  0 enddoctype
+  0 <d b=x c=p>
+  0 </d>
+== choice groups (expand, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 elementdecl a
+  0 default [\n]
+  0 default [|]
+  0 elementdecl a2
+  0 default [\n]
+  0 default [|]
+  0 default [|]
+  0 elementdecl a3
+  0 default [\n]
+  0 default [|]
+  0 elementdecl a4
+  0 default [\n]
+  0 default [|]
+  0 default [|]
+  0 elementdecl a5
+  0 default [\n]
+  0 elementdecl a6
+  0 default [\n]
+  0 elementdecl a7
+  0 default [\n]
+  0 default [|]
+  0 elementdecl a8
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 </d>
+== choice groups (default, no declaration handlers, pieces 1048576)
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a]
+  0 default [ ]
+  0 default [(]
+  0 default [b]
+  0 default [|]
+  0 default [c]
+  0 default [)+]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a2]
+  0 default [ ]
+  0 default [(]
+  0 default [b]
+  0 default [|]
+  0 default [c]
+  0 default [|]
+  0 default [d]
+  0 default [)]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a3]
+  0 default [ ]
+  0 default [(]
+  0 default [ ]
+  0 default [b]
+  0 default [ ]
+  0 default [|]
+  0 default [ ]
+  0 default [c]
+  0 default [ ]
+  0 default [|]
+  0 default [ ]
+  0 default [d]
+  0 default [ ]
+  0 default [|]
+  0 default [ ]
+  0 default [e]
+  0 default [ ]
+  0 default [)]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a4]
+  0 default [ ]
+  0 default [(]
+  0 default [(]
+  0 default [b]
+  0 default [|]
+  0 default [c]
+  0 default [|]
+  0 default [d]
+  0 default [)]
+  0 default [,]
+  0 default [e]
+  0 default [)]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a5]
+  0 default [ ]
+  0 default [(]
+  0 default [(]
+  0 default [b]
+  0 default [|]
+  0 default [c]
+  0 default [|]
+  0 default [d]
+  0 default [)]
+  0 default [|]
+  0 default [(]
+  0 default [e]
+  0 default [|]
+  0 default [f]
+  0 default [|]
+  0 default [g]
+  0 default [)]
+  0 default [)*]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a6]
+  0 default [ ]
+  0 default [(]
+  0 default [#PCDATA]
+  0 default [|]
+  0 default [b]
+  0 default [|]
+  0 default [c]
+  0 default [|]
+  0 default [d]
+  0 default [)*]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a7]
+  0 default [ ]
+  0 default [(]
+  0 default [b]
+  0 default [,]
+  0 default [c]
+  0 default [,]
+  0 default [d]
+  0 default [,]
+  0 default [e]
+  0 default [)]
+  0 default [>]
+  0 default [\n]
+  0 default [<!ELEMENT]
+  0 default [ ]
+  0 default [a8]
+  0 default [ ]
+  0 default [(]
+  0 default [b?]
+  0 default [|]
+  0 default [c*]
+  0 default [|]
+  0 default [d+]
+  0 default [)]
+  0 default [>]
+  0 default [\n]
+  0 enddoctype
+  0 <d>
+  0 </d>
+== whitespace in and around the DOCTYPE (default, pieces 1048576)
+  0 xmldecl 1.0 - -1
+  0 default [\n\n]
+  0 doctype d sys=[-] pub=[-] 1
+  0 default [\n\n    ]
+  0 elementdecl d
+  0 default [   \n\t]
+  0 attlist d a CDATA - 0
+  0 default [\n\n\n  ]
+  0 comment  comment 
+  0 default [  \n ]
+  0 enddoctype
+  0 default [  \n\n]
+  0 <d>
+  0 text [\n]
+  0 text [  text]
+  0 text [\n]
+  0 </d>
+  0 default [\n\n]
+== two-byte characters split between pieces (no default, text only, pieces 7)
+  0 text [\n]
+  0 text [ \ta]
+  1 text [0=":" a]
+  2 text [00=":"]
+  2 text [\n]
+  3 text [ \ta1="]
+  4 text [À" a10=]
+  5 text ["À"]
+  5 text [\n]
+  5 text [ \t]
+  6 text [a2="Á"]
+  7 text [ a20="]
+  8 text [Á"]
+  8 text [\n]
+  8 text [ \ta3]
+  9 text [="˾" a]
+  10 text [30="˾"]
+  11 text [\n]
+  11 text [ \ta4="]
+  12 text [Â" a40]
+  13 text [="Â"]
+  13 text [\n]
+  13 text [ ]
+  14 text [\ta5="Ã]
+  15 text [" a50="]
+  16 text [Ã"]
+  16 text [\n]
+  16 text [ \ta]
+  17 text [6="˽" ]
+  18 text [a60="˽]
+  19 text ["]
+  19 text [\n]
+  19 text [ \ta7=]
+  20 text ["˿" a7]
+  21 text [0="˿"]
+  21 text [\n]
+  22 text [ \ta8="]
+  23 text [Ͱ" a80=]
+  24 text ["Ͱ"]
+  24 text [\n]
+  24 text [ \t]
+  25 text [a9="ͱ"]
+  26 text [ a90="]
+  27 text [ͱ"]
+  27 text [\n]
+== two-byte characters split between pieces (no default, text only, pieces 5)
+  0 text [\n]
+  0 text [ ]
+  1 text [\ta0="]
+  2 text [:" a0]
+  3 text [0=":"]
+  4 text [\n]
+  4 text [ \ta1]
+  5 text [="À"]
+  6 text [ a10=]
+  7 text ["À"]
+  7 text [\n]
+  8 text [ \ta2=]
+  9 text ["Á" ]
+  10 text [a20="]
+  11 text [Á"]
+  11 text [\n]
+  11 text [ ]
+  12 text [\ta3="]
+  13 text [˾" a]
+  14 text [30="]
+  15 text [˾"]
+  15 text [\n]
+  15 text [ \t]
+  16 text [a4="]
+  17 text [Â" a4]
+  18 text [0="Â]
+  19 text ["]
+  19 text [\n]
+  19 text [ \ta]
+  20 text [5="Ã]
+  21 text [" a50]
+  22 text [="Ã"]
+  23 text [\n]
+  23 text [ \ta6]
+  24 text [="˽"]
+  25 text [ a60=]
+  26 text ["˽"]
+  26 text [\n]
+  27 text [ \ta7=]
+  28 text ["˿" ]
+  29 text [a70="]
+  30 text [˿"]
+  30 text [\n]
+  30 text [ ]
+  31 text [\ta8="]
+  32 text [Ͱ" a]
+  33 text [80="]
+  34 text [Ͱ"]
+  34 text [\n]
+  34 text [ \t]
+  35 text [a9="]
+  36 text [ͱ" a9]
+  37 text [0="ͱ]
+  38 text ["]
+  38 text [\n]
+== two-byte characters split between pieces (default, text only, pieces 7)
+  0 default [<d>]
+  0 text [\n]
+  0 text [ \ta]
+  1 text [0=":" a]
+  2 text [00=":"]
+  2 text [\n]
+  3 text [ \ta1="]
+  4 text [À" a10=]
+  5 text ["À"]
+  5 text [\n]
+  5 text [ \t]
+  6 text [a2="Á"]
+  7 text [ a20="]
+  8 text [Á"]
+  8 text [\n]
+  8 text [ \ta3]
+  9 text [="˾" a]
+  10 text [30="˾"]
+  11 text [\n]
+  11 text [ \ta4="]
+  12 text [Â" a40]
+  13 text [="Â"]
+  13 text [\n]
+  13 text [ ]
+  14 text [\ta5="Ã]
+  15 text [" a50="]
+  16 text [Ã"]
+  16 text [\n]
+  16 text [ \ta]
+  17 text [6="˽" ]
+  18 text [a60="˽]
+  19 text ["]
+  19 text [\n]
+  19 text [ \ta7=]
+  20 text ["˿" a7]
+  21 text [0="˿"]
+  21 text [\n]
+  22 text [ \ta8="]
+  23 text [Ͱ" a80=]
+  24 text ["Ͱ"]
+  24 text [\n]
+  24 text [ \t]
+  25 text [a9="ͱ"]
+  26 text [ a90="]
+  27 text [ͱ"]
+  27 text [\n]
+  27 default [</d>]
+== ASCII text in the same pieces (no default, text only, pieces 7)
+  0 text [\n]
+  0 text [ \ta]
+  1 text [0=":" a]
+  2 text [00=":"]
+  2 text [\n]
+  3 text [ \ta1="A]
+  4 text [" a10="]
+  5 text [A"]
+  5 text [\n]
+  5 text [ \ta2]
+  6 text [="B" a2]
+  7 text [0="B"]
+  7 text [\n]
+  7 text [ ]
+  8 text [\ta3="C"]
+  9 text [ a30="C]
+  10 text ["]
+  10 text [\n]
+  10 text [ \ta4=]
+  11 text ["D" a40]
+  12 text [="D"]
+  12 text [\n]
+  12 text [ \t]
+  13 text [a5="E" ]
+  14 text [a50="E"]
+  15 text [\n]

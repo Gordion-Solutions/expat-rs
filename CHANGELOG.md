@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- After a parameter entity reference that isn't read, entity and
+  attribute-list declarations are processed when the document is
+  standalone="yes", as XML 1.0 §5.1 requires (they were skipped).
+
 ## 0.3.0 — 2026-11-15
 
 What the libexpat-compatible C library (`expat-capi`, in this repository,
