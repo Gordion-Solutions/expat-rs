@@ -1,6 +1,6 @@
 [package]
 name = "expat-rs"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.83"
 description = "Memory-safe XML 1.0 parser: streaming, namespaces, hardened against hostile input; aims for libexpat-level conformance"
