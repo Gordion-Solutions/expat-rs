@@ -35,9 +35,9 @@ Project page: <https://gordionsolutions.co.uk/software/#expat-rs>
 
 A from-scratch Rust implementation of an XML 1.0 parser, designed to:
 
-1. **Pass the W3C XML Conformance Test Suite** (the same suite libexpat passes — 1,801 of 1,809 tests).
+1. **Pass the W3C XML Conformance Test Suite**, the suite libexpat is measured against.
 2. **Eliminate an entire class of memory-safety vulnerabilities.** libexpat has a long history of CVEs spanning integer overflows (e.g. CVE-2024-45491, -45492, -45493), denial-of-service via resource exhaustion (e.g. CVE-2024-8176, CVE-2023-52425), external entity issues (e.g. CVE-2024-28757, CVE-2013-0340), and other logic-level vulnerabilities (e.g. CVE-2018-20843). Rust eliminates the memory-safety subset by construction; the remaining classes require careful implementation regardless of language.
-3. **Provide a drop-in replacement** for libexpat's C ABI, so existing consumers (CPython's `pyexpat`, Apache HTTPD's `mod_dav`, D-Bus, fontconfig) can adopt it without recompiling.
+3. **Provide a drop-in replacement** for libexpat's C ABI: [`expat-capi`](expat-capi/) builds a `libexpat` with libexpat's own `expat.h`. CPython's `pyexpat` and Android's uses of libexpat have been tested on it; other consumers may work but haven't been tested yet.
 
 ## What this is not
 
@@ -46,14 +46,14 @@ A from-scratch Rust implementation of an XML 1.0 parser, designed to:
 
 ## Why
 
-libexpat parses XML in CPython's stdlib (xml.parsers.expat), Apache HTTPD's mod_dav, D-Bus, fontconfig, CMake, and many embedded systems. Bugs in libexpat translate directly to RCE in all of them.
-Replacing it with a memory-safe parser closes that path.
+libexpat parses XML in CPython's stdlib (xml.parsers.expat), Android, Apache HTTPD's mod_dav, D-Bus, fontconfig, CMake, and many embedded systems, so a memory-safety bug in libexpat can affect all of them.
+A memory-safe parser removes that class of bug.
 
 ## Usage
 
 ```toml
 [dependencies]
-expat-rs = "0.2"
+expat-rs = "0.3"
 ```
 
 ```rust
@@ -101,47 +101,31 @@ parse` (or `stream_vs_whole`). Benchmarks: `bench/generate.py` then
 
 ```
 .
-├── METHODOLOGY.md             # how it is written
+├── METHODOLOGY.md          # how it is written
 ├── src/
-│   ├── lib.rs                 # public API
-│   ├── token.rs               # Token enum (every W3C production cited)
-│   ├── lexer.rs               # tokeniser
-│   ├── lexer/dtd.rs           # DOCTYPE + internal-subset syntax
-│   ├── chars.rs               # §2.2 Char, Name rules per Edition, char refs
-│   ├── edition4.rs            # 4th ed. Appendix B tables (generated)
-│   ├── event.rs               # high-level Event enum (parser output)
-│   ├── parser.rs              # well-formedness checker
-│   ├── entities.rs            # entity declarations and table
-│   ├── expand.rs              # entity expansion checks, bounded
-│   ├── encoding.rs            # byte → text decoding (UTF-8/16, ASCII, Latin-1)
-│   ├── namespaces.rs          # Namespaces in XML 1.0 layer (opt-in)
-│   ├── stream.rs              # StreamParser: incremental (push) parsing
-│   ├── error.rs               # XmlError + Position
-│   └── bin/
-│       └── xmlwf.rs           # CLI checker (--edition, --external, --namespaces, --canonical, --chunk)
-├── tests/
-│   ├── tokeniser_tests.rs       # 21 tests, one per spec production
-│   ├── well_formedness_tests.rs # 32 tests: §2.1 constraints, §2.2 Char, XMLDecl, …
-│   ├── entity_security_tests.rs # 16 tests: billion-laughs, quadratic-blowup, …
-│   ├── edition_tests.rs         # 5 tests: Fifth vs. Fourth Edition names
-│   ├── dtd_tests.rs             # 9 tests: DOCTYPE and markup declarations
-│   ├── entity_semantics_tests.rs # 16 tests: replacement text, recursion, loader
-│   ├── encoding_tests.rs        # 4 tests: UTF-8/16, ASCII, Latin-1
-│   ├── event_tests.rs           # 17 tests: what callers receive
-│   ├── namespace_tests.rs       # 8 tests: resolution, scoping, constraints
-│   ├── stream_tests.rs          # 10 tests: every split point vs whole-document
-│   └── resource_tests.rs        # 7 tests: inputs that were quadratic or crashed
-├── fuzz/                      # cargo-fuzz targets (parse, stream_vs_whole)
-├── bench/                     # benchmark documents + comparison with libexpat
+│   ├── lib.rs              # public API
+│   ├── token.rs            # Token enum (every W3C production cited)
+│   ├── lexer.rs            # tokeniser
+│   ├── lexer/dtd.rs        # DOCTYPE + internal-subset syntax
+│   ├── chars.rs            # §2.2 Char, Name rules per Edition, char refs
+│   ├── edition4.rs         # 4th ed. Appendix B tables (generated)
+│   ├── event.rs            # Event enum, spans, content models
+│   ├── parser.rs           # well-formedness checker
+│   ├── entities.rs         # entity declarations, expansion and amplification limits
+│   ├── expand.rs           # entity expansion checks, bounded
+│   ├── external.rs         # external entity references and their parsers
+│   ├── encoding.rs         # byte → text decoding, caller-supplied encodings
+│   ├── namespaces.rs       # Namespaces in XML 1.0 layer (opt-in)
+│   ├── stream.rs           # StreamParser: incremental (push) parsing
+│   ├── error.rs            # XmlError, ErrorKind, Position
+│   └── bin/xmlwf.rs        # command-line checker
+├── tests/                  # integration tests, one file per area
+├── fuzz/                   # cargo-fuzz targets (parse, stream_vs_whole)
+├── bench/                  # benchmark documents + comparison with libexpat
+├── expat-capi/             # the libexpat-compatible C library (not on crates.io)
 ├── tools/
 │   └── gen_edition4_tables.py # generates src/edition4.rs from the W3C spec
-└── conformance/
-    ├── README.md              # how to run the W3C XML test suite
-    ├── runner.sh              # iterates the suite, reports pass/fail
-    ├── editions.py            # which tests apply to which edition
-    ├── output.py              # compares canonical output with expected files
-    ├── namespaces.py          # runs the W3C namespace tests
-    └── STATUS.md              # current conformance numbers
+└── conformance/            # W3C suite runners and STATUS.md
 ```
 
 ## License
@@ -151,14 +135,14 @@ if a consumer needs a feature in both).
 
 ## Roadmap
 
-- [x] Tokeniser (21 tests, every W3C XML 1.0 production)
-- [x] Well-formedness checker (20 tests — tag balance, root uniqueness,
+- [x] Tokeniser (every W3C XML 1.0 production)
+- [x] Well-formedness checker (tag balance, root uniqueness,
       attribute uniqueness, prolog/epilog rules, built-in entities)
 - [x] Full Unicode `NameStartChar` / `NameChar` per §2.3
 - [x] Edition selection: Fifth (default) or Fourth Edition name rules
 - [x] §2.2 Char enforcement and validated character references
-- [x] Entity expansion with defensive limits — 9 security tests including
-      billion-laughs and quadratic-blowup
+- [x] Entity expansion with defensive limits, including billion-laughs and
+      quadratic-blowup defences
 - [x] Edition-aware W3C XML conformance runner — 1441 / 1501 (Fifth),
       1750 / 1810 (Fourth)
 - [x] DOCTYPE and internal-subset syntax (all markup declarations)
@@ -173,5 +157,6 @@ if a consumer needs a feature in both).
 - [x] Hardening — linear time on all inputs, cargo-fuzz targets, benchmarks vs libexpat
 - [ ] External DTD subset, parameter-entity expansion, conditional sections
 - [ ] DTD validity constraints
-- [ ] Full W3C conformance — match libexpat's 1801/1809
-- [ ] `libexpat.so` ABI shim — drop-in replacement
+- [ ] Full W3C conformance, as libexpat
+- [x] libexpat-compatible C library — [`expat-capi`](expat-capi/): CPython's
+      test suites and Android's uses of libexpat pass on it
