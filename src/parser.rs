@@ -89,8 +89,8 @@ pub(crate) struct State<'l> {
     /// Attribute types and defaults from `<!ATTLIST>` declarations.
     pub(crate) attlists: Arc<AttlistTable>,
     pub edition: Edition,
-    /// See `Parser::with_libexpat_versions`.
-    pub(crate) libexpat_versions: bool,
+    /// See `Parser::with_libexpat_leniency`.
+    pub(crate) libexpat_leniency: bool,
     /// Parsing an external parsed entity's content (§4.3.2) rather than a
     /// document: see `crate::external`.
     pub(crate) entity_mode: bool,
@@ -102,6 +102,8 @@ pub(crate) struct State<'l> {
     /// Report whitespace outside the root element
     /// (`StreamParser::with_outside_whitespace`).
     pub(crate) outside_whitespace: bool,
+    /// Report CDATA sections in pieces (`StreamParser::with_cdata_pieces`).
+    pub(crate) cdata_pieces: bool,
     /// Stray text before the root whose last run of name characters
     /// reached the end of its text token, by where the run starts. What
     /// follows decides the error (see `stray_text`).
@@ -142,11 +144,12 @@ impl<'l> State<'l> {
             entities: Arc::new(EntityTable::new()),
             attlists: Arc::new(AttlistTable::default()),
             edition: Edition::default(),
-            libexpat_versions: false,
+            libexpat_leniency: false,
             entity_mode: false,
             external_refs: false,
             open_entities: Vec::new(),
             outside_whitespace: false,
+            cdata_pieces: false,
             pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
@@ -217,6 +220,7 @@ impl<'l> State<'l> {
             limits: self.expansion_limits,
             edition: self.edition,
             entity_declared_wfc: self.entity_declared_wfc,
+            cdata_pieces: self.cdata_pieces,
         };
         Expander::new(
             &self.entities,
@@ -236,7 +240,7 @@ impl<'l> State<'l> {
             entities: Arc::clone(&self.entities),
             attlists: Arc::clone(&self.attlists),
             edition: self.edition,
-            libexpat_versions: self.libexpat_versions,
+            libexpat_leniency: self.libexpat_leniency,
             entity_declared_wfc: self.entity_declared_wfc,
             expansion_limits: self.expansion_limits,
             amplification: self.amplification,
@@ -250,7 +254,7 @@ impl<'l> State<'l> {
         self.entities = Arc::clone(&context.entities);
         self.attlists = Arc::clone(&context.attlists);
         self.set_edition(context.edition);
-        self.libexpat_versions = context.libexpat_versions;
+        self.libexpat_leniency = context.libexpat_leniency;
         self.entity_declared_wfc = context.entity_declared_wfc;
         self.expansion_limits = context.expansion_limits;
         self.amplification = context.amplification;
@@ -268,7 +272,7 @@ impl<'l> State<'l> {
 
     /// Character data, references and CDATA are content here: inside an
     /// element, or anywhere in an external entity's content.
-    fn in_content(&self) -> bool {
+    pub(crate) fn in_content(&self) -> bool {
         !self.stack.is_empty() || self.entity_mode
     }
 
@@ -548,6 +552,14 @@ impl<'l> State<'l> {
                 }
                 self.emit(Event::CData(normalize_newlines(s)), out)
             }
+            Token::CDataStart => {
+                if !self.in_content() {
+                    return Err(self.outside_root("CDATA section outside the root element"));
+                }
+                self.emit(Event::StartCData, out)
+            }
+            Token::CDataText(s) => self.emit(Event::CData(normalize_newlines(s)), out),
+            Token::CDataEnd => self.emit(Event::EndCData, out),
             Token::Comment(s) => self.emit(Event::Comment(normalize_newlines(s)), out),
             Token::ProcessingInstruction { target, body } => {
                 self.emit(Event::ProcessingInstruction { target: Cow::Borrowed(target), body: normalize_newlines(body) }, out)
@@ -609,13 +621,18 @@ impl<'a> Parser<'a> {
         self
     }
 
-    /// Accept any `version` in the XML declaration that libexpat accepts:
-    /// any run of `[A-Za-z0-9._-]`, even an empty one, rather than only
-    /// what the edition allows (`1.0`, or `1.` and digits). For drop-in
-    /// compatibility with libexpat; off by default.
-    pub fn with_libexpat_versions(mut self) -> Self {
-        self.lexer = self.lexer.with_libexpat_versions(true);
-        self.state.libexpat_versions = true;
+    /// Accept what libexpat accepts where XML 1.0 is stricter, for drop-in
+    /// compatibility with it; off by default:
+    ///
+    /// - any `version` in the XML declaration made of `[A-Za-z0-9._-]`,
+    ///   even an empty one, rather than only what the edition allows (`1.0`,
+    ///   or `1.` and digits);
+    /// - with [`crate::StreamParser`], after a UTF-8 byte order mark, an
+    ///   encoding declaration naming a non-UTF-16 encoding other than UTF-8
+    ///   is followed (XML 1.0 §4.3.3 makes it a fatal error).
+    pub fn with_libexpat_leniency(mut self) -> Self {
+        self.lexer = self.lexer.with_libexpat_leniency(true);
+        self.state.libexpat_leniency = true;
         self
     }
 

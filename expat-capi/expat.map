@@ -1,6 +1,0 @@
-EXPAT_2 {
-  global:
-    XML_*;
-  local:
-    *;
-};

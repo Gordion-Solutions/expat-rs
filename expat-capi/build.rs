@@ -1,7 +1,9 @@
-//! Link settings for the shared library: export only the XML_* symbols
-//! (Rust runtime symbols stay hidden, so two Rust libraries in one process
-//! don't collide), and give it libexpat's names so programs built against
-//! the real libexpat load it unchanged.
+//! Link settings for the shared library: give it libexpat's names so
+//! programs built against the real libexpat load it unchanged, and on macOS
+//! export only the XML_* symbols (Rust runtime symbols stay hidden, so two
+//! Rust libraries in one process don't collide). On Linux and Android rustc
+//! already exports only the XML_* functions, unversioned like libexpat's; a
+//! version script of our own would clash with rustc's under GNU ld.
 
 fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -12,10 +14,10 @@ fn main() {
         }
         Ok("linux") => {
             println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libexpat.so.1");
-            println!("cargo:rustc-cdylib-link-arg=-Wl,--version-script={dir}/expat.map");
         }
+        // AOSP's libexpat is plain libexpat.so.
+        Ok("android") => println!("cargo:rustc-cdylib-link-arg=-Wl,-soname,libexpat.so"),
         _ => {}
     }
     println!("cargo:rerun-if-changed=exported_symbols.txt");
-    println!("cargo:rerun-if-changed=expat.map");
 }

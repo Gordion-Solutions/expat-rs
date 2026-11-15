@@ -35,6 +35,16 @@ benchmarked against libexpat.
   same results at any chunk size, with reparse deferral.
 - `xmlwf`: `--edition`, `--external`, `--namespaces`, `--canonical`,
   `--chunk`.
+- `StreamParser::with_cdata_pieces`: CDATA sections as
+  `Event::StartCData`, `Event::CData` pieces as the input arrives, and
+  `Event::EndCData`, as libexpat delivers them.
+- `StreamParser::with_unknown_encoding`: other encodings through an
+  `EncodingMap`, single-byte or with 2–4 byte sequences decoded by a
+  converter (libexpat's `XML_Encoding`).
+- `with_libexpat_leniency` (on `Parser` and `StreamParser`): accept what
+  libexpat accepts beyond XML 1.0: any version number made of
+  `[A-Za-z0-9._-]`, and an encoding declaration after a UTF-8 byte order
+  mark naming another encoding.
 
 ### Security and robustness
 - Linear time on all inputs: fixed a stack overflow on deeply nested
@@ -52,6 +62,15 @@ benchmarked against libexpat.
   no longer public.
 - Errors report the real line and column (they were always 1:1 in
   parser-level errors); columns count characters.
+
+### Changed
+- `StreamParser`, as libexpat: a `]]>` in content is an error as soon as
+  it is fed, and the text running into it (after its last line end) is
+  not delivered first. Input forced to UTF-16 without a byte order mark
+  takes its byte order from the first character. `StreamDecoder` chooses
+  between UTF-16 and 8-bit input from the first two bytes (it waited for
+  four), so a first chunk of two or three bytes is parsed at once.
+- Minimum Rust version 1.83, the version AOSP builds with.
 
 ### Performance
 - 0.56–0.79x libexpat 2.8.2's throughput on 25–56 MB documents

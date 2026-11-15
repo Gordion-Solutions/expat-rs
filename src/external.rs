@@ -27,7 +27,7 @@ pub struct EntityContext {
     pub(crate) entities: Arc<EntityTable>,
     pub(crate) attlists: Arc<AttlistTable>,
     pub(crate) edition: Edition,
-    pub(crate) libexpat_versions: bool,
+    pub(crate) libexpat_leniency: bool,
     pub(crate) entity_declared_wfc: bool,
     pub(crate) expansion_limits: ExpansionLimits,
     pub(crate) amplification: AmplificationLimits,

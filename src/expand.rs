@@ -46,6 +46,8 @@ pub(crate) struct ExpandSettings {
     pub edition: Edition,
     /// Whether §4.1 WFC Entity Declared applies to this document.
     pub entity_declared_wfc: bool,
+    /// CDATA sections are reported in pieces (`Event::StartCData`, ...).
+    pub cdata_pieces: bool,
 }
 
 pub(crate) struct Expander<'e, 'l> {
@@ -55,6 +57,8 @@ pub(crate) struct Expander<'e, 'l> {
     pub edition: Edition,
     /// Whether §4.1 WFC Entity Declared applies to this document.
     pub entity_declared_wfc: bool,
+    /// CDATA sections are reported in pieces (`Event::StartCData`, ...).
+    pub cdata_pieces: bool,
     pub loader: Option<&'e mut ExternalLoader<'l>>,
     /// Position of the reference being checked, for error reports.
     pub pos: Position,
@@ -82,9 +86,9 @@ impl<'e, 'l> Expander<'e, 'l> {
         pos: Position,
         external: Option<EntityContext>,
     ) -> Self {
-        let ExpandSettings { limits, edition, entity_declared_wfc } = settings;
+        let ExpandSettings { limits, edition, entity_declared_wfc, cdata_pieces } = settings;
         Self {
-            table, attlists, limits, edition, entity_declared_wfc, loader, pos, external,
+            table, attlists, limits, edition, entity_declared_wfc, cdata_pieces, loader, pos, external,
             expanded: 0, stack: Vec::new(), events: Vec::new(), failed_ref: None,
         }
     }
@@ -327,7 +331,19 @@ impl<'e, 'l> Expander<'e, 'l> {
                 Token::EntityRef(inner) => self.check_content_entity(inner)?,
                 Token::CharRef(c) => self.events.push(Event::Text(Cow::Owned(c.to_string()))),
                 Token::Text(t) => self.events.push(Event::Text(owned(t))),
+                // A section in replacement text is whole: as one piece,
+                // when they are asked for.
+                Token::CData(t) if self.cdata_pieces => {
+                    self.events.push(Event::StartCData);
+                    if !t.is_empty() {
+                        self.events.push(Event::CData(owned(t)));
+                    }
+                    self.events.push(Event::EndCData);
+                }
                 Token::CData(t) => self.events.push(Event::CData(owned(t))),
+                Token::CDataStart | Token::CDataText(_) | Token::CDataEnd => {
+                    unreachable!("replacement text is tokenised with whole CDATA sections")
+                }
                 Token::Comment(t) => self.events.push(Event::Comment(owned(t))),
                 Token::ProcessingInstruction { target, body } => {
                     self.events.push(Event::ProcessingInstruction { target: owned(target), body: owned(body) });

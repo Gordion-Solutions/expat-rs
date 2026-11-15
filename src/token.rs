@@ -64,6 +64,15 @@ pub enum Token<'a> {
     /// `<![CDATA[ ... ]]>`. Per §2.7 [Production 18].
     CData(&'a str),
 
+    /// With CDATA in pieces (`Lexer::with_cdata_pieces`): the `<![CDATA[`
+    /// that opens a section, ...
+    CDataStart,
+    /// ... text of the section (up to its `]]>`, an invalid character or
+    /// the end of the input), ...
+    CDataText(&'a str),
+    /// ... and the `]]>` that closes it.
+    CDataEnd,
+
     /// `<!-- ... -->`. Per §2.5 [Production 15].
     Comment(&'a str),
 

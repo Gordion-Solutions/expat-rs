@@ -1,0 +1,246 @@
+== plain double byte (map 0, pieces 4096)
+  <r>          @1:39
+    attr a=乁
+  text [x\xe4\xb9\x82y]               @1:48
+  text [\x0a]               @1:51
+  text [\xe4\xb9\x83]               @2:0
+  end          @2:1
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name chars (map 0, pieces 4096)
+  <乁>        @1:39
+    attr 乂=1
+  end          @1:49
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name start not allowed (map 0, pieces 4096)
+  -> not well-formed (invalid token)               @1:40
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name char after start (map 0, pieces 4096)
+  <a·>        @1:39
+  end          @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert -1 (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert > U+FFFF (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert surrogate (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert control (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert FFFE (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== cut off (map 0, pieces 4096)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> partial character               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== bad lead byte (map 0, pieces 4096)
+  <r>          @1:39 byte=39
+  text [ab]               @1:42 byte=42
+  -> not well-formed (invalid token)               @1:44 byte=44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== triple (map 8, pieces 4096)
+  <r>          @1:39
+  text [a\xe5\x81\x81z]               @1:42
+  end          @1:45
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== plain double byte (map 0, pieces 1)
+  <r>          @1:39
+    attr a=乁
+  text [x\xe4\xb9\x82y]               @1:48
+  text [\x0a]               @1:51
+  text [\xe4\xb9\x83]               @2:0
+  end          @2:1
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name chars (map 0, pieces 1)
+  <乁>        @1:39
+    attr 乂=1
+  end          @1:49
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name start not allowed (map 0, pieces 1)
+  -> not well-formed (invalid token)               @1:40
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== name char after start (map 0, pieces 1)
+  <a·>        @1:39
+  end          @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert -1 (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert > U+FFFF (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert surrogate (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert control (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== convert FFFE (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> not well-formed (invalid token)               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== cut off (map 0, pieces 1)
+  <r>          @1:39
+  text [ab]               @1:42
+  -> partial character               @1:44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== bad lead byte (map 0, pieces 1)
+  <r>          @1:39 byte=39
+  text [ab]               @1:42 byte=42
+  -> not well-formed (invalid token)               @1:44 byte=44
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== triple (map 8, pieces 1)
+  <r>          @1:39
+  text [a\xe5\x81\x81z]               @1:42
+  end          @1:45
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== single > U+FFFF (map 1, pieces 4096)
+  release(d)
+  -> unknown encoding               @1:30 byte=30
+  releases before free: 1
+  releases after free: 1
+== single surrogate (map 2, pieces 4096)
+  <r>          @1:39 byte=39
+  -> not well-formed (invalid token)               @1:42 byte=42
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== below -4 (map 3, pieces 4096)
+  release(d)
+  -> unknown encoding               @1:30 byte=30
+  releases before free: 1
+  releases after free: 1
+== lead without convert (map 4, pieces 4096)
+  release(d)
+  -> unknown encoding               @1:30 byte=30
+  releases before free: 1
+  releases after free: 1
+== lead on a control byte (map 5, pieces 4096)
+  <r>          @1:39
+  text [\xe4\xb9\x81]               @1:42
+  end          @1:43
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== lead on $ (map 6, pieces 4096)
+  <r>          @1:39 byte=39
+  end          @1:43 byte=43
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== single only, convert set (map 7, pieces 4096)
+  <r>          @1:39 byte=39
+  text [\xc3\xa9]               @1:42 byte=42
+  end          @1:43 byte=43
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== single control (map 9, pieces 4096)
+  <r>          @1:39 byte=39
+  -> not well-formed (invalid token)               @1:42 byte=42
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== single FFFE (map 10, pieces 4096)
+  <r>          @1:39 byte=39
+  -> not well-formed (invalid token)               @1:42 byte=42
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== BOM then latin-1 (map 0, pieces 4096)
+  <r>          @2:0 byte=47
+  text [caf\xc3\xa9]               @2:3 byte=50
+  end          @2:7 byte=54
+  releases before free: 0
+  releases after free: 0
+== BOM then latin-1, pieces (map 0, pieces 1)
+  <r>          @2:0 byte=47
+  text [caf\xc3\xa9]               @2:3 byte=50
+  end          @2:7 byte=54
+  releases before free: 0
+  releases after free: 0
+== BOM then unknown (map 0, pieces 4096)
+  <r>          @1:42
+  text [\xe4\xb9\x81]               @1:45
+  end          @1:46
+  releases before free: 0
+  release(d)
+  releases after free: 1
+== BOM then ascii (map 0, pieces 4096)
+  <r>          @1:44 byte=44
+  text [a]               @1:47 byte=47
+  end          @1:48 byte=48
+  releases before free: 0
+  releases after free: 0

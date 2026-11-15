@@ -1,0 +1,358 @@
+== declarations
+  xmldecl          @1:0 byte=0
+  doctype+subset   @2:12 byte=34
+  entity i         @3:11 byte=47
+  entity e         @4:30 byte=82
+  entity p         @5:32 byte=116
+  entity u         @6:32 byte=150
+  entity %pi       @7:14 byte=169
+  entity %pe       @8:29 byte=203
+  notation gif     @9:22 byte=227
+  notation n2      @10:28 byte=268
+  notation n3      @11:29 byte=299
+  element r        @12:16 byte=325
+  element a        @13:12 byte=341
+  element b        @14:20 byte=368
+  element c        @15:22 byte=393
+  element d        @16:20 byte=417
+  element e        @17:12 byte=433
+  attlist x        @18:20 byte=458
+  attlist y        @18:37 byte=475
+  attlist z        @18:56 byte=494
+  attlist w        @19:32 byte=530
+  t                @20:0 byte=541
+   c               @21:0 byte=552
+  end-doctype      @22:1 byte=564
+  r                @23:0 byte=566
+  /r               @23:4 byte=570
+== declarations in pieces of 3
+  xmldecl          @1:0 byte=0
+  doctype+subset   @2:12 byte=34
+  entity i         @3:11 byte=47
+  entity e         @4:30 byte=82
+  entity p         @5:32 byte=116
+  entity u         @6:32 byte=150
+  entity %pi       @7:14 byte=169
+  entity %pe       @8:29 byte=203
+  notation gif     @9:22 byte=227
+  notation n2      @10:28 byte=268
+  notation n3      @11:29 byte=299
+  element r        @12:16 byte=325
+  element a        @13:12 byte=341
+  element b        @14:20 byte=368
+  element c        @15:22 byte=393
+  element d        @16:20 byte=417
+  element e        @17:12 byte=433
+  attlist x        @18:20 byte=458
+  attlist y        @18:37 byte=475
+  attlist z        @18:56 byte=494
+  attlist w        @19:32 byte=530
+  t                @20:0 byte=541
+   c               @21:0 byte=552
+  end-doctype      @22:1 byte=564
+  r                @23:0 byte=566
+  /r               @23:4 byte=570
+== doctype system
+  doctype          @1:26 byte=26
+  end-doctype      @1:26 byte=26
+  r                @2:0 byte=28
+  /r               @2:4 byte=32
+== doctype public
+  doctype          @1:34 byte=34
+  end-doctype      @1:34 byte=34
+  r                @2:0 byte=36
+  /r               @2:4 byte=40
+== doctype plain
+  doctype          @1:11 byte=11
+  end-doctype      @1:11 byte=11
+  r                @2:0 byte=13
+  /r               @2:4 byte=17
+== doctype system and subset
+  doctype+subset   @1:27 byte=27
+  entity i         @1:40 byte=40
+  end-doctype      @1:47 byte=47
+  r                @2:0 byte=49
+  /r               @2:4 byte=53
+== multi-line declarations
+  doctype+subset   @2:2 byte=14
+  entity i         @5:2 byte=31
+  attlist x        @10:2 byte=63
+  end-doctype      @12:0 byte=75
+  r                @13:0 byte=77
+  /r               @13:4 byte=81
+== stop, stopping at xmldecl
+  xmldecl          @1:0 byte=0
+  -> parsing aborted @1:0 byte=0
+== stop, stopping at pro
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  -> parsing aborted @2:0 byte=22
+== stop, stopping at c1
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  -> parsing aborted @2:9 byte=31
+== stop, stopping at doctype+subset
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  -> parsing aborted @3:12 byte=53
+== stop, stopping at entity e
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  -> parsing aborted @4:11 byte=66
+== stop, stopping at dtdpi
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  -> parsing aborted @5:0 byte=71
+== stop, stopping at end-doctype
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  -> parsing aborted @6:1 byte=84
+== stop, stopping at r
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  -> parsing aborted @7:9 byte=95
+== stop, stopping at inpi
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  -> parsing aborted @7:19 byte=105
+== stop, stopping at c2
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  -> parsing aborted @7:28 byte=114
+== stop, stopping at e
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  e                @7:32 byte=118
+  /e               @7:36 byte=122
+  -> parsing aborted @7:36 byte=122
+== stop, stopping at /e
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  e                @7:32 byte=118
+  /e               @7:36 byte=122
+  -> parsing aborted @7:36 byte=122
+== stop, stopping at /r
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  e                @7:32 byte=118
+  /e               @7:36 byte=122
+  /r               @7:36 byte=122
+  -> parsing aborted @7:40 byte=126
+== stop, stopping at epi
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  e                @7:32 byte=118
+  /e               @7:36 byte=122
+  /r               @7:36 byte=122
+  epi              @8:0 byte=127
+  -> parsing aborted @8:9 byte=136
+== stop, stopping at c3
+  xmldecl          @1:0 byte=0
+  pro              @2:0 byte=22
+  c1               @2:9 byte=31
+  doctype+subset   @3:12 byte=53
+  entity e         @4:11 byte=66
+  dtdpi            @5:0 byte=71
+  end-doctype      @6:1 byte=84
+  r                @7:0 byte=86
+  inpi             @7:9 byte=95
+  c2               @7:19 byte=105
+  e                @7:32 byte=118
+  /e               @7:36 byte=122
+  /r               @7:36 byte=122
+  epi              @8:0 byte=127
+  c3               @8:9 byte=136
+  -> parsing aborted @8:18 byte=145
+== stop in an entity, stopping at y
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at x
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at ep
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at ec
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  ec               @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at /x
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  ec               @2:17 byte=90
+  /x               @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at z
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  ec               @2:17 byte=90
+  /x               @2:17 byte=90
+  z                @2:20 byte=93
+  /z               @2:24 byte=97
+  -> parsing aborted @2:24 byte=97
+== stop in an entity, stopping at /y
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  -> parsing aborted @2:17 byte=90
+== stop in an entity, stopping at /z
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  ec               @2:17 byte=90
+  /x               @2:17 byte=90
+  z                @2:20 byte=93
+  /z               @2:24 byte=97
+  -> parsing aborted @2:24 byte=97
+== stop in an entity, stopping at /r
+  doctype+subset   @1:12 byte=12
+  entity e         @1:24 byte=24
+  entity f         @1:64 byte=64
+  end-doctype      @1:71 byte=71
+  r                @2:0 byte=73
+  y                @2:13 byte=86
+  /y               @2:17 byte=90
+  x                @2:17 byte=90
+  ep               @2:17 byte=90
+  ec               @2:17 byte=90
+  /x               @2:17 byte=90
+  z                @2:20 byte=93
+  /z               @2:24 byte=97
+  x                @2:24 byte=97
+  ep               @2:24 byte=97
+  ec               @2:24 byte=97
+  /x               @2:24 byte=97
+  /r               @2:27 byte=100
+  -> parsing aborted @2:31 byte=104
+== first chunk of 3 bytes
+  a                @1:0 byte=0
+  after it @1:3 byte=3
+== first chunk of 2 bytes
+  after it @1:0 byte=0
+== first chunk of 1 bytes
+  after it @1:0 byte=0
+== first chunk of 2 bytes
+  after it @1:0 byte=0
+== first chunk of 3 bytes
+  after it @1:0 byte=0

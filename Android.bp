@@ -1,0 +1,48 @@
+// Draft build rules for building expat-rs and its libexpat-compatible C
+// library (expat-capi) inside an AOSP tree, e.g. as external/expat-rs.
+// Not yet built with Soong: the crates build with AOSP's Rust (1.83.0) and
+// the NDK, and the only dependency, thiserror, is AOSP's libthiserror.
+//
+// libexpat_rs_capi is a drop-in for external/expat's libexpat: the same
+// functions and header (expat-capi/include/expat.h, libexpat 2.7.1's; AOSP
+// ships 2.6.4), with DTD, general entity and namespace support as AOSP
+// configures it. To try it in place of libexpat, either point a module's
+// shared_libs/static_libs at libexpat_rs_capi, or rename external/expat's
+// module and rename this one to "libexpat".
+
+rust_library_rlib {
+    name: "libexpat_rs",
+    crate_name: "expat_rs",
+    srcs: ["src/lib.rs"],
+    edition: "2021",
+    rustlibs: ["libthiserror"],
+    host_supported: true,
+    vendor_available: true,
+    product_available: true,
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.art",
+        "com.android.art.debug",
+    ],
+    min_sdk_version: "apex_inherit",
+}
+
+// Shared (libexpat_rs_capi.so) and static variants for C and C++ users.
+rust_ffi {
+    name: "libexpat_rs_capi",
+    crate_name: "expat",
+    srcs: ["expat-capi/src/lib.rs"],
+    edition: "2021",
+    rustlibs: ["libexpat_rs"],
+    // Exported to C/C++ dependents.
+    include_dirs: ["expat-capi/include"],
+    host_supported: true,
+    vendor_available: true,
+    product_available: true,
+    apex_available: [
+        "//apex_available:platform",
+        "com.android.art",
+        "com.android.art.debug",
+    ],
+    min_sdk_version: "apex_inherit",
+}

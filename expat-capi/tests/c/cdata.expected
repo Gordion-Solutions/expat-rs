@@ -1,0 +1,1494 @@
+== document 1 in pieces of 1
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  start-cdata @1:5
+  [<raw> &] @1:14
+  [ ] @1:21
+  [s] @1:22
+  [t] @1:23
+  [u] @1:24
+  [f] @1:25
+  [f] @1:26
+  [\n] @1:27
+  [l] @2:0
+  [i] @2:1
+  [n] @2:2
+  [e] @2:3
+  [2] @2:4
+  end-cdata @2:5
+  [c] @2:8
+  [d] @2:9
+  </r> @2:10
+== document 1 in pieces of 2
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  start-cdata @1:5
+  [<raw> ] @1:14
+  [& ] @1:20
+  [st] @1:22
+  [uf] @1:24
+  [f] @1:26
+  [\n] @1:27
+  [li] @2:0
+  [ne] @2:2
+  [2] @2:4
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 3
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<] @1:14
+  [raw] @1:15
+  [> &] @1:18
+  [ st] @1:21
+  [uff] @1:24
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 4
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  start-cdata @1:5
+  [<raw> ] @1:14
+  [& st] @1:20
+  [uff] @1:24
+  [\n] @1:27
+  [line] @2:0
+  [2] @2:4
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 5
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<] @1:14
+  [raw> ] @1:15
+  [& stu] @1:20
+  [ff] @1:25
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 6
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> & st] @1:14
+  [uff] @1:24
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 7
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> &] @1:14
+  [ stuff] @1:21
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 8
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<r] @1:14
+  [aw> & st] @1:16
+  [uff] @1:24
+  [\n] @1:27
+  [line] @2:0
+  [2] @2:4
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 9
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw] @1:14
+  [> & stuff] @1:18
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 10
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> ] @1:14
+  [& stuff] @1:20
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 11
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> & ] @1:14
+  [stuff] @1:22
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 12
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> & st] @1:14
+  [uff] @1:24
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 13
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> & stuf] @1:14
+  [f] @1:26
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 14
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> & stuff] @1:14
+  [\n] @1:27
+  [line2] @2:0
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 15
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<] @1:14
+  [raw> & stuff] @1:15
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 1 in pieces of 16
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<r] @1:14
+  [aw> & stuff] @1:16
+  [\n] @1:27
+  [line] @2:0
+  [2] @2:4
+  end-cdata @2:5
+  [cd] @2:8
+  </r> @2:10
+== document 2 in pieces of 1
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 2
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 3
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 4
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 5
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 6
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 7
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 8
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 9
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 10
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 11
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 12
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 13
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 14
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 15
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== document 2 in pieces of 16
+  <r> @1:0
+  start-cdata @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  end-cdata @1:24
+  -> not well-formed (invalid token) @1:30
+== document 3 in pieces of 1
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 2
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 3
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 4
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 5
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 6
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 7
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 8
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 9
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 10
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 11
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 12
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 13
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 14
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 15
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 3 in pieces of 16
+  <r> @1:0
+  start-cdata @1:3
+  [x] @1:12
+  [\n] @1:13
+  [y] @2:0
+  [\n] @2:1
+  [z] @3:0
+  [\n] @3:1
+  end-cdata @4:0
+  </r> @4:3
+== document 4 in pieces of 1
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ ] @1:17
+  [😀] @1:19
+  [ ] @1:20
+  [e] @1:21
+  [n] @1:22
+  [d] @1:23
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 2
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ ] @1:17
+  [😀] @1:19
+  [ e] @1:20
+  [nd] @1:22
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 3
+  <r> @1:0
+  start-cdata @1:3
+  [caf] @1:12
+  [é ] @1:15
+  [€] @1:17
+  [ ] @1:18
+  [😀 ] @1:19
+  [end] @1:21
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 4
+  <r> @1:0
+  start-cdata @1:3
+  [caf] @1:12
+  [é ] @1:15
+  [€ ] @1:17
+  [😀 e] @1:19
+  [nd] @1:22
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 5
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ ] @1:17
+  [😀 end] @1:19
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 6
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ ] @1:17
+  [😀 end] @1:19
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 7
+  <r> @1:0
+  start-cdata @1:3
+  [ca] @1:12
+  [fé €] @1:14
+  [ 😀 e] @1:18
+  [nd] @1:22
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 8
+  <r> @1:0
+  start-cdata @1:3
+  [caf] @1:12
+  [é € ] @1:15
+  [😀 end] @1:19
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 9
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ 😀 ] @1:17
+  [end] @1:21
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 10
+  <r> @1:0
+  start-cdata @1:3
+  [café ] @1:12
+  [€ 😀 end] @1:17
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 11
+  <r> @1:0
+  start-cdata @1:3
+  [café € ] @1:12
+  [😀 end] @1:19
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 12
+  <r> @1:0
+  start-cdata @1:3
+  [café € ] @1:12
+  [😀 end] @1:19
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 13
+  <r> @1:0
+  start-cdata @1:3
+  [c] @1:12
+  [afé € 😀] @1:13
+  [ end] @1:20
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 14
+  <r> @1:0
+  start-cdata @1:3
+  [ca] @1:12
+  [fé € 😀 e] @1:14
+  [nd] @1:22
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 15
+  <r> @1:0
+  start-cdata @1:3
+  [caf] @1:12
+  [é € 😀 end] @1:15
+  end-cdata @1:24
+  </r> @1:27
+== document 4 in pieces of 16
+  <r> @1:0
+  start-cdata @1:3
+  [caf] @1:12
+  [é € 😀 end] @1:15
+  end-cdata @1:24
+  </r> @1:27
+== document 5 in pieces of 1
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 2
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 3
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 4
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 5
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 6
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 7
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 8
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 9
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 10
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 11
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 12
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 13
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 14
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 15
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 5 in pieces of 16
+  <r> @1:0
+  start-cdata @1:3
+  end-cdata @1:12
+  start-cdata @1:15
+  []] @1:24
+  end-cdata @1:25
+  start-cdata @1:28
+  []] @1:37
+  []] @1:38
+  end-cdata @1:39
+  </r> @1:42
+== document 6 in pieces of 1
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [thr] @2:0
+  [e] @2:3
+  [e] @2:4
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 2
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 3
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [on] @1:13
+  [e] @1:15
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [t] @1:29
+  [wo] @1:30
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 4
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 5
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [t] @1:29
+  [wo] @1:30
+  [\n] @1:32
+  [th] @2:0
+  [ree] @2:2
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 6
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [t] @1:29
+  [wo] @1:30
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 7
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [o] @1:13
+  [ne] @1:14
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 8
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 9
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 10
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [t] @1:29
+  [wo] @1:30
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 11
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 12
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [thr] @2:0
+  [ee] @2:3
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 13
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 14
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [o] @1:13
+  [ne] @1:14
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 15
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [on] @1:13
+  [e] @1:15
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [t] @1:29
+  [wo] @1:30
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== document 6 in pieces of 16
+  <r> @1:0
+  [t] @1:3
+  start-cdata @1:4
+  [one] @1:13
+  end-cdata @1:16
+  [u] @1:19
+  start-cdata @1:20
+  [two] @1:29
+  [\n] @1:32
+  [three] @2:0
+  end-cdata @2:5
+  [v] @2:8
+  </r> @2:9
+== CDATA in an entity's replacement text
+  -> not well-formed (invalid token) @1:38
+  -> not well-formed (invalid token) @1:38
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  [\n] @4:3
+  [c] @4:3
+  []] @4:3
+  []d] @4:3
+  [\n] @4:3
+  [e] @4:3
+  end-cdata @4:3
+  </r> @4:6
+-- stop at callback 1
+  <r> @4:0
+  start-cdata @4:3
+  (stopping)
+  [a] @4:3
+  -> parsing aborted @4:3
+-- stop at callback 2
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  (stopping)
+  -> parsing aborted @4:3
+-- stop at callback 3
+  <r> @4:0
+  start-cdata @4:3
+  [a] @4:3
+  []b] @4:3
+  (stopping)
+  -> parsing aborted @4:3
+== the default handler
+  <r> @1:0
+  [ab] @1:3
+  default [<![CDATA[] @1:5
+  [<] @1:14
+  [raw] @1:15
+  [> &] @1:18
+  [ st] @1:21
+  [uff] @1:24
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  default []]>] @2:5
+  [cd] @2:8
+  </r> @2:10
+  <r> @1:0
+  [ab] @1:3
+  default [<![CDATA[] @1:5
+  [<raw> & st] @1:14
+  [uff] @1:24
+  [\n] @1:27
+  [li] @2:0
+  [ne2] @2:2
+  default []]>] @2:5
+  [cd] @2:8
+  </r> @2:10
+  <r> @1:0
+  [ab] @1:3
+  default [<![CDATA[] @1:5
+  [<raw] @1:14
+  [> & stuff] @1:18
+  [\n] @1:27
+  [line2] @2:0
+  default []]>] @2:5
+  [cd] @2:8
+  </r> @2:10
+  <r> @1:0
+  default [<![CDATA[] @1:3
+  [a] @1:12
+  []b] @1:13
+  []] @1:15
+  []c] @1:16
+  []] @1:18
+  []] @1:19
+  []d] @1:20
+  []] @1:22
+  []] @1:23
+  default []]>] @1:24
+  [e] @1:27
+  -> not well-formed (invalid token) @1:30
+== an invalid character inside
+  <r> @1:0
+  start-cdata @1:3
+  [good] @1:12
+  -> not well-formed (invalid token) @1:16
+  <r> @1:0
+  start-cdata @1:3
+  [goo] @1:12
+  [d] @1:15
+  -> not well-formed (invalid token) @1:16
+== unclosed
+  <r> @1:0
+  start-cdata @1:3
+  [never ends] @1:12
+  -> unclosed CDATA section @1:22
+  <r> @1:0
+  start-cdata @1:3
+  [neve] @1:12
+  [r en] @1:16
+  [ds] @1:20
+  -> unclosed CDATA section @1:22
+  <r> @1:0
+  start-cdata @1:3
+  [alm] @1:12
+  [ost] @1:15
+  -> unclosed CDATA section @1:18
+== a stray ]]> in content
+  <r> @1:0
+  [a] @1:3
+  [bc] @1:4
+  [d] @1:6
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [ab] @1:3
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [a] @1:3
+  [b] @1:4
+  [\n] @1:5
+  [c] @2:0
+  [d] @2:1
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  [cd] @2:0
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  [ab] @1:3
+  [\n] @1:5
+  -> not well-formed (invalid token) @2:4
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  -> not well-formed (invalid token) @1:5
+  <r> @1:0
+  [a] @1:3
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  [a] @1:3
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  -> not well-formed (invalid token) @1:6
+  <r> @1:0
+  [c] @1:3
+  [af] @1:4
+  [é] @1:6
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  [ca] @1:3
+  [fé] @1:5
+  -> not well-formed (invalid token) @1:9
+  <r> @1:0
+  -> not well-formed (invalid token) @1:9
+== stopping in a CDATA callback
+-- stop at callback 1
+  <r> @1:0
+  [ab] @1:3
+  (stopping)
+  -> parsing aborted @1:5
+-- stop at callback 2
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  (stopping)
+  -> parsing finished @1:14
+-- stop at callback 3
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> &] @1:14
+  (stopping)
+  -> parsing aborted @1:21
+-- stop at callback 4
+  <r> @1:0
+  [ab] @1:3
+  start-cdata @1:5
+  [<raw> &] @1:14
+  [ stuff] @1:21
+  (stopping)
+  -> parsing aborted @1:27
+== stopping in the start handler at the end of a chunk, then more
+  start-cdata @1:3
+  (stopping)
+  call 1 -> 1 code 0 @1:12
+  call 2 -> 0 code 36 @1:12
+  call 3 -> 0 code 36 @1:12
+  start-cdata @1:3
+  (stopping)
+  [x] @1:12
+  call 1 -> 0 code 35 @1:13
+  call 2 -> 0 code 36 @1:13
+  call 3 -> 0 code 36 @1:13
+  start-cdata @1:3
+  (stopping)
+  end-cdata @1:12
+  call 1 -> 0 code 35 @1:12
+  call 2 -> 0 code 36 @1:12
+  call 3 -> 0 code 36 @1:12
+  [t] @1:3
+  (stopping)
+  call 1 -> 0 code 35 @1:4
+  call 2 -> 0 code 36 @1:4
+  call 3 -> 0 code 36 @1:4
+== UTF-16LE
+  <r> @1:0
+  start-cdata @1:3
+  [ab] @1:12
+  []c] @1:14
+  [\n] @1:16
+  [de] @2:0
+  [f] @2:2
+  end-cdata @2:3
+  </r> @2:6
+  <r> @1:0
+  start-cdata @1:3
+  [ab] @1:12
+  []c] @1:14
+  [\n] @1:16
+  [d] @2:0
+  [ef] @2:1
+  end-cdata @2:3
+  </r> @2:6
+  <r> @1:0
+  start-cdata @1:3
+  [ab] @1:12
+  []c] @1:14
+  [\n] @1:16
+  [d] @2:0
+  [ef] @2:1
+  end-cdata @2:3
+  </r> @2:6
+  <r> @1:0
+  start-cdata @1:3
+  [ab] @1:12
+  []c] @1:14
+  [\n] @1:16
+  [def] @2:0
+  end-cdata @2:3
+  </r> @2:6
+  <r> @1:0
+  start-cdata @1:3
+  [ab] @1:12
+  []c] @1:14
+  [\n] @1:16
+  [def] @2:0
+  end-cdata @2:3
+  </r> @2:6

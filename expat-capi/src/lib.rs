@@ -28,11 +28,12 @@
 mod generated;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_ulonglong, c_void, CStr, CString};
 use std::ptr;
 
 use expat_rs::{
-    AmplificationLimits, ByteMap, ContentKind, ContentModel, Edition, EntityContext, ErrorKind, Event, Located, Position, Quantifier, Span,
+    AmplificationLimits, ContentKind, ContentModel, Edition, EncodingMap, EntityContext, ErrorKind, Event, Located, MapEntry, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
 use generated::*;
@@ -247,9 +248,28 @@ pub struct Shim {
     /// Where the token being delivered ends: parsing stopped by
     /// `XML_StopParser` reports this position, as libexpat does.
     token_end: Cell<Position>,
+    /// The root element hasn't started: parsing stopped by `XML_StopParser`
+    /// before it (in the prolog, the DOCTYPE included) reports the position
+    /// the handler was given, not `token_end`, as libexpat does.
+    before_root: Cell<bool>,
     /// Stopped during the start of an empty element (`<e/>`): its end is
     /// still delivered, since libexpat finishes the token first.
     stop_in_empty_tag: Cell<bool>,
+    /// Stopped in a CDATA section's start handler: libexpat still delivers
+    /// the section's next token (the first piece of its text, or its end),
+    /// and when none is in the input yet, `XML_Parse` succeeds and the next
+    /// call finds the parser finished.
+    stop_in_cdata_start: Cell<bool>,
+    /// Stopped in a CDATA section's end handler: the stop reports the
+    /// position the handler was given, as libexpat does.
+    stop_at_handler: Cell<bool>,
+    /// The event being handled came from expanding an entity reference.
+    in_entity: Cell<bool>,
+    /// The ATTLIST declaration last reported (its text's address and
+    /// length, during one XML_Parse call), where each of its attributes is
+    /// reported and where it ends in the input: worked out once for all its
+    /// attributes, so that a long declaration costs no more than its length.
+    attlist: RefCell<Option<AttlistPlaces>>,
     /// `XML_UseParserAsHandlerArg`: handlers get the parser, not user data.
     parser_as_arg: Cell<bool>,
     /// Source text of the event being delivered, for `XML_DefaultCurrent`
@@ -290,6 +310,9 @@ pub struct Shim {
     /// The input is UTF-16 (from a byte order mark or a zero byte at the
     /// start, as libexpat detects it).
     utf16: Cell<bool>,
+    /// A UTF-8 byte order mark followed by a declaration of another
+    /// encoding: libexpat counts its three bytes as three columns.
+    bom_as_bytes: Cell<bool>,
     /// Character data is delivered in pieces of at most `TEXT_PIECE` bytes:
     /// libexpat does this for input it has to convert (anything but UTF-8
     /// and US-ASCII).
@@ -342,7 +365,12 @@ impl Shim {
             stop_requested: Cell::new(false),
             current_span: Cell::new(None),
             token_end: Cell::new(Position::start()),
+            before_root: Cell::new(true),
             stop_in_empty_tag: Cell::new(false),
+            stop_in_cdata_start: Cell::new(false),
+            stop_at_handler: Cell::new(false),
+            in_entity: Cell::new(false),
+            attlist: RefCell::new(None),
             parser_as_arg: Cell::new(false),
             current_raw: RefCell::new(String::new()),
             id_attributes: RefCell::new(std::collections::HashMap::new()),
@@ -360,6 +388,7 @@ impl Shim {
             xml_decl_early: Cell::new(false),
             bom: Cell::new(None),
             utf16: Cell::new(false),
+            bom_as_bytes: Cell::new(false),
             chunk_text: Cell::new(false),
             stop_error: Cell::new(XML_ERROR_ABORTED),
             ns_sep,
@@ -403,16 +432,17 @@ impl Shim {
         let mut p = match &self.entity {
             // Edition, version rule, namespaces and limits come from the
             // document.
-            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()),
+            Some(context) => context.parser().with_reparse_deferral(self.reparse_deferral.get()).with_cdata_pieces(),
             None => {
                 // libexpat applies the Fourth Edition's name rules
                 // (Appendix B) but accepts any version number made of name
                 // characters.
                 let mut p = StreamParser::new()
                     .with_edition(Edition::Fourth)
-                    .with_libexpat_versions()
+                    .with_libexpat_leniency()
                     .with_external_entity_refs()
                     .with_outside_whitespace()
+                    .with_cdata_pieces()
                     .with_reparse_deferral(self.reparse_deferral.get())
                     .with_amplification_limits(self.amplification.get());
                 if self.ns_sep.is_some() {
@@ -477,21 +507,43 @@ impl Shim {
                 // The rest of the empty-element token the stop came in.
                 self.stop_in_empty_tag.set(false);
                 self.dispatch(l);
+            } else if self.stop_in_cdata_start.get() && matches!(l.event, Event::CData(_) | Event::EndCData) {
+                self.stop_in_cdata_start.set(false);
+                match &l.event {
+                    Event::CData(text) => self.cdata_first_token(text, l.raw, l.span.start, l.input_start),
+                    _ => self.dispatch(l),
+                }
             }
         };
         let mut result = parser.feed_located(input, &mut deliver);
         if result.is_ok() && is_final && !self.stop_requested.get() {
             result = parser.finish_located(&mut deliver);
         }
+        // Its key is an address in this call's text.
+        self.attlist.borrow_mut().take();
         let parsed_to = parser.position();
         let parsed_input = parser.input_offset(parsed_to);
         let error_input = result.as_ref().err().map(|e| parser.input_offset(e.position()));
         drop(core);
         if self.stop_requested.get() {
-            self.pos.set(self.token_end.get());
-            self.input_pos.set(self.input_end.get());
+            if self.stop_in_cdata_start.replace(false) {
+                // Nothing of the section came after the stop in this input.
+                self.pos.set(self.token_end.get());
+                self.input_pos.set(self.input_end.get());
+                self.status.set(Status::Finished);
+                return XML_STATUS_OK;
+            }
+            let at_handler = self.stop_at_handler.replace(false);
+            // Within an entity's replacement text libexpat stays at the
+            // reference.
+            if !(at_handler || self.in_entity.get() || matches!(self.role, Role::Root) && self.before_root.get()) {
+                self.pos.set(self.token_end.get());
+                self.input_pos.set(self.input_end.get());
+            }
             self.error.set(self.stop_error.get());
-            self.status.set(Status::Failed);
+            // Stopped is finished, as in libexpat: a later call reports
+            // XML_ERROR_FINISHED.
+            self.status.set(Status::Finished);
             return XML_STATUS_ERROR;
         }
         match result {
@@ -565,9 +617,15 @@ impl Shim {
     }
 
     /// libexpat's column for `pos`: 0-based, and counting a byte order mark
-    /// as a column on line 1.
+    /// on line 1: as one column, or as three when a UTF-8 mark is followed
+    /// by a declaration of another encoding (libexpat reads its bytes in
+    /// that encoding).
     fn column(&self, pos: Position) -> XML_Size {
-        let bom = (pos.line == 1 && self.bom.get() == Some(true)) as u32;
+        let bom = match (pos.line, self.bom.get()) {
+            (1, Some(true)) if self.bom_as_bytes.get() => 3,
+            (1, Some(true)) => 1,
+            _ => 0,
+        };
         (pos.column.saturating_sub(1) + bom) as XML_Size
     }
 
@@ -578,28 +636,73 @@ impl Shim {
     }
 }
 
-/// Ask a C unknown-encoding handler for a byte map.
+/// Ask a C unknown-encoding handler for an encoding map.
 fn byte_map_from_c(handler: unsafe extern "C" fn(*mut c_void, *const XML_Char, *mut XML_Encoding) -> c_int,
-                   data: *mut c_void, name: &str) -> Option<ByteMap> {
+                   data: *mut c_void, name: &str) -> Option<EncodingMap> {
     let name = CString::new(name).ok()?;
     let mut info = XML_Encoding { map: [-1; 256], data: ptr::null_mut(), convert: None, release: None };
     // SAFETY: the handler was registered for this purpose with `data`;
     // `name` is a valid C string and `info` a valid, writable XML_Encoding
     // for the duration of the call.
     let ok = unsafe { handler(data, name.as_ptr(), &mut info) };
-    let map = (ok == XML_STATUS_OK && acceptable_map(&info.map)).then(|| {
-        let mut map: ByteMap = Box::new([None; 256]);
-        for (byte, &entry) in info.map.iter().enumerate() {
-            // -1 marks a byte that is invalid in the encoding.
-            map[byte] = u32::try_from(entry).ok().and_then(char::from_u32);
-        }
-        map
-    });
-    if let Some(release) = info.release {
-        // SAFETY: release takes the data pointer the handler stored in info.
-        unsafe { release(info.data) };
+    // Owns the handler's data from here: released when dropped, after the
+    // map's last use (or now, if the map isn't used).
+    let converter = Converter { data: info.data, convert: info.convert, release: info.release };
+    if ok != XML_STATUS_OK || !acceptable_map(&info.map, converter.convert.is_some()) {
+        return None;
     }
-    map
+    let entries = info.map.map(|entry| match entry {
+        -4..=-2 => MapEntry::Lead((-entry) as u8),
+        _ => u32::try_from(entry).ok().and_then(char::from_u32).map_or(MapEntry::Invalid, MapEntry::Char),
+    });
+    // The converter goes with the map whenever it has something to do,
+    // decoding sequences or releasing the data when the parser is done.
+    if converter.release.is_some() || entries.iter().any(|e| matches!(e, MapEntry::Lead(_))) {
+        Some(EncodingMap::multi_byte(entries, move |sequence| converter.convert(sequence)))
+    } else {
+        Some(EncodingMap::single_byte(entries.map(|e| match e {
+            MapEntry::Char(c) => Some(c),
+            _ => None,
+        })))
+    }
+}
+
+/// An unknown-encoding handler's `convert` callback with its data, which
+/// its `release` callback frees when this is dropped.
+struct Converter {
+    data: *mut c_void,
+    convert: Option<unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int>,
+    release: Option<unsafe extern "C" fn(*mut c_void)>,
+}
+
+// SAFETY: the converter is used only by the parser it was made for, which
+// a C program uses from one thread at a time, as libexpat requires; the
+// data pointer is the handler's, valid until `release`.
+unsafe impl Send for Converter {}
+
+impl Converter {
+    /// The character a multi-byte sequence stands for. libexpat accepts
+    /// only results up to U+FFFF from `convert`; anything else (or -1) is an
+    /// invalid sequence. So is an ASCII result: libexpat takes a sequence
+    /// as data whatever it decodes to, so one decoding to `<`, a quote or a
+    /// keyword's letter never acts as markup there; once decoded, expat-rs
+    /// couldn't tell it from markup, so it refuses it instead.
+    fn convert(&self, sequence: &[u8]) -> Option<char> {
+        let convert = self.convert?;
+        // SAFETY: `convert` gets the data the handler gave it and a pointer
+        // to a whole sequence of the length its map entry declared.
+        let c = unsafe { convert(self.data, sequence.as_ptr().cast()) };
+        u32::try_from(c).ok().filter(|&c| (0x80..=0xFFFF).contains(&c)).and_then(char::from_u32)
+    }
+}
+
+impl Drop for Converter {
+    fn drop(&mut self) {
+        if let Some(release) = self.release {
+            // SAFETY: release takes the data pointer the handler stored, once.
+            unsafe { release(self.data) };
+        }
+    }
 }
 
 /// The pseudo-attributes of an XML declaration at the start of `bytes`:
@@ -640,6 +743,119 @@ fn doctype_header_len(raw: &str) -> usize {
         }
     }
     raw.len()
+}
+
+/// See `Parser::attlist`.
+struct AttlistPlaces {
+    key: (usize, usize),
+    places: HashMap<String, (Position, usize)>,
+    end: usize,
+}
+
+/// Whether `raw` is one general entity reference (not a character reference
+/// or a predefined entity, which libexpat treats as ordinary tokens): the
+/// events from its replacement text all carry it.
+fn is_entity_reference(raw: &str) -> bool {
+    match raw.strip_prefix('&').and_then(|r| r.strip_suffix(';')) {
+        Some(name) => {
+            !name.is_empty()
+                && !name.starts_with('#')
+                && !name.contains(['&', ';'])
+                && !matches!(name, "amp" | "lt" | "gt" | "apos" | "quot")
+        }
+        None => false,
+    }
+}
+
+/// Whether `text` is `raw` with its line ends normalised: character data
+/// from the source, not from an entity's replacement text.
+fn is_source(text: &str, raw: &str) -> bool {
+    if raw.contains('\r') {
+        raw.replace("\r\n", "\n").replace('\r', "\n") == text
+    } else {
+        raw == text
+    }
+}
+
+/// CDATA text in libexpat's tokens, which also end before each `]` (which
+/// may start the closing `]]>`): each part after the first starts with `]`.
+fn cdata_parts(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut from = 0;
+    for (i, _) in s.match_indices(']') {
+        if i > from {
+            parts.push(&s[from..i]);
+            from = i;
+        }
+    }
+    parts.push(&s[from..]);
+    parts
+}
+
+/// Where libexpat reports a DTD event's position, as a byte offset into
+/// its source text: at the token that completes what the handler is told.
+/// The DOCTYPE starts at its `[` or closing `>`, and ends at the closing
+/// `>`; an internal entity at its value, an unparsed one at its notation's
+/// name, an external one at the closing `>`; a notation at its system
+/// literal, or the closing `>` without one; an element declaration at the
+/// last token of its content model; each attribute of an ATTLIST at its
+/// default (`#IMPLIED`, `#REQUIRED` or the value). `None` for other events,
+/// which libexpat reports where they start. (Found by black-box tests of
+/// libexpat 2.8.2.)
+fn decl_trigger(event: &Event<'_>, raw: &str) -> Option<usize> {
+    match event {
+        Event::Doctype { .. } => return doctype_header_len(raw).checked_sub(1),
+        Event::EndDoctype => return raw.ends_with('>').then(|| raw.len() - 1),
+        Event::EntityDecl { .. } | Event::NotationDecl { .. } | Event::ElementDecl { .. } | Event::AttlistDecl { .. } => {}
+        _ => return None,
+    }
+    let tokens: Vec<&str> = dtd_tokens(raw).into_iter().filter(|t| !t.starts_with([' ', '\t', '\r', '\n'])).collect();
+    let (&close, body) = tokens.split_last().filter(|(close, _)| **close == ">")?;
+    let last = body.last().copied();
+    let token = match event {
+        Event::EntityDecl { system_id: Some(_), notation: None, .. } => close,
+        Event::EntityDecl { .. } | Event::ElementDecl { .. } => last?,
+        Event::NotationDecl { system_id, .. } => if system_id.is_some() { last? } else { close },
+        // Each attribute's: see `Parser::attlist_trigger`.
+        Event::AttlistDecl { .. } => return None,
+        _ => return None,
+    };
+    Some(token.as_ptr() as usize - raw.as_ptr() as usize)
+}
+
+/// Where libexpat reports each attribute of an ATTLIST declaration (`raw`):
+/// at its default, as an offset into `raw`, in order. After `<!ATTLIST` and
+/// the element's name, each definition is a name, a type (a keyword, an
+/// enumeration in parentheses, or `NOTATION` and one), then `#IMPLIED`,
+/// `#REQUIRED`, or a value with or without `#FIXED`. The first definition of
+/// a name, as libexpat keeps, is the first in the list.
+fn attlist_defaults(raw: &str) -> Vec<(&str, usize)> {
+    let mut defaults = Vec::new();
+    let tokens: Vec<&str> = dtd_tokens(raw).into_iter().filter(|t| !t.starts_with([' ', '\t', '\r', '\n'])).collect();
+    let Some((_, tokens)) = tokens.split_last().filter(|(close, _)| **close == ">") else {
+        return defaults;
+    };
+    let mut i = 2;
+    while i < tokens.len() {
+        let name = tokens[i];
+        i += 1;
+        if tokens.get(i).is_some_and(|t| t.eq_ignore_ascii_case("NOTATION")) {
+            i += 1;
+        }
+        if tokens.get(i) == Some(&"(") {
+            while tokens.get(i).is_some_and(|t| !t.starts_with(')')) {
+                i += 1;
+            }
+        }
+        i += 1;
+        if tokens.get(i) == Some(&"#FIXED") {
+            i += 1;
+        }
+        let Some(default) = tokens.get(i) else { break };
+        i += 1;
+        defaults.push((name, default.as_ptr() as usize - raw.as_ptr() as usize));
+    }
+    defaults
 }
 
 /// Split DTD markup into the tokens libexpat gives its default handler:
@@ -691,20 +907,22 @@ const XML_SYNTAX_CHARS: &[u8] =
 
 /// Whether libexpat would accept an unknown-encoding handler's map: each
 /// of XML's syntax characters is its own byte and no other byte stands for
-/// one, and there are no multi-byte sequences (entries below -1), which
-/// would need the `convert` callback expat-capi doesn't support. Other
-/// maps are an unknown encoding. (Found by black-box tests of libexpat:
-/// remapping `$` or a control byte is accepted, `A`, `<` or LF is not.)
-fn acceptable_map(map: &[c_int; 256]) -> bool {
+/// one; nothing maps above U+FFFF; multi-byte sequences (entries -2 to -4,
+/// the sequence length) only with a `convert` callback, and nothing below -4. Other maps are an
+/// unknown encoding. (Found by black-box tests of libexpat: remapping `$`
+/// or a control byte is accepted, `A`, `<` or LF is not.)
+fn acceptable_map(map: &[c_int; 256], has_convert: bool) -> bool {
     let is_syntax = |c: c_int| u8::try_from(c).is_ok_and(|c| XML_SYNTAX_CHARS.contains(&c));
     map.iter().enumerate().all(|(byte, &entry)| {
         let byte = byte as c_int;
         if entry < -1 {
-            false // a multi-byte sequence
+            // A sequence lead: needs `convert`, and may not be a syntax byte.
+            (-4..=-2).contains(&entry) && has_convert && !is_syntax(byte)
         } else if is_syntax(byte) {
             entry == byte // a syntax character must be its own byte
         } else {
-            !is_syntax(entry) // and no other byte may stand for one
+            // No other byte may stand for one, nor for anything above U+FFFF.
+            !is_syntax(entry) && entry <= 0xFFFF
         }
     })
 }
@@ -816,11 +1034,29 @@ impl Shim {
 
     /// Deliver one expat-rs event as libexpat callbacks.
     fn dispatch(&self, l: Located<'_>) {
-        self.pos.set(l.span.start);
+        // A declaration's handlers are told where the token completing it
+        // is, not where it starts.
+        let (pos, input_pos, input_end) = match &l.event {
+            Event::AttlistDecl { attribute, .. } => self.attlist_place(&l, attribute),
+            event => {
+                let at = decl_trigger(event, l.raw).unwrap_or(0);
+                let before = &l.raw[..at];
+                (
+                    l.span.start.advance(before),
+                    l.input_start + self.input_len(before),
+                    l.input_start + self.input_len(l.raw),
+                )
+            }
+        };
+        self.pos.set(pos);
         self.current_span.set(Some(l.span));
         self.token_end.set(l.span.end);
-        self.input_pos.set(l.input_start);
-        self.input_end.set(l.input_start + self.input_len(l.raw));
+        self.input_pos.set(input_pos);
+        self.input_end.set(input_end);
+        self.in_entity.set(is_entity_reference(l.raw));
+        if matches!(l.event, Event::StartElement { .. }) {
+            self.before_root.set(false);
+        }
         if self.handlers.default.get().is_some() {
             if let Ok(mut raw) = self.current_raw.try_borrow_mut() {
                 raw.clear();
@@ -830,6 +1066,8 @@ impl Shim {
         match &l.event {
             Event::XmlDecl(d) => {
                 self.standalone.set(d.standalone == Some(true));
+                let other = d.encoding.is_some_and(|e| !e.eq_ignore_ascii_case("UTF-8"));
+                self.bom_as_bytes.set(self.bom.get() == Some(true) && !self.utf16.get() && other && self.encoding.borrow().is_none());
                 self.chunk_text.set(self.converts(d.encoding));
             }
             Event::Doctype { system_id, public_id, .. } => {
@@ -960,35 +1198,31 @@ impl Shim {
                 }
             }
             Event::Text(text) => self.character_data(&text, l.raw, l.span.start, l.input_start),
-            Event::CData(text) => {
-                const OPEN: &str = "<![CDATA[";
-                let content_raw = l.raw.get(OPEN.len()..l.raw.len().saturating_sub(3)).unwrap_or("");
-                let content_at = l.span.start.advance(OPEN);
-                let content_input = l.input_start + self.input_len(OPEN);
+            // CDATA sections come in pieces (`with_cdata_pieces`), their
+            // text as far as the input goes, as libexpat delivers it.
+            Event::StartCData => {
                 match h.start_cdata.get() {
                     // SAFETY: registered StartCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default(OPEN);
+                        self.to_default(l.raw);
                     }
                 }
                 if self.stop_requested.get() {
-                    return;
+                    self.stop_in_cdata_start.set(true);
                 }
-                self.character_data(&text, content_raw, content_at, content_input);
-                if self.stop_requested.get() {
-                    return;
-                }
-                self.pos.set(content_at.advance(content_raw));
-                self.input_pos.set(content_input + self.input_len(content_raw));
-                self.token_end.set(l.span.end);
-                self.input_end.set(l.input_start + self.input_len(l.raw));
+            }
+            Event::CData(text) => self.cdata_text(&text, l.raw, l.span.start, l.input_start),
+            Event::EndCData => {
                 match h.end_cdata.get() {
                     // SAFETY: registered EndCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default("]]>");
+                        self.to_default(l.raw);
                     }
+                }
+                if self.stop_requested.get() {
+                    self.stop_at_handler.set(true);
                 }
             }
             Event::Comment(text) => match h.comment.get() {
@@ -1139,9 +1373,13 @@ impl Shim {
     /// DOCTYPE handler, declarations without their handler, the whitespace
     /// between declarations and parameter-entity references always, the
     /// closing `]>` without an end handler).
+    ///
+    /// The DOCTYPE's text is kept even without a default handler, which a
+    /// handler may set from inside the DOCTYPE (minidom does, to collect the
+    /// internal subset).
     fn dtd_default(&self, l: &Located<'_>) {
         let h = &self.handlers;
-        if h.default.get().is_none() {
+        if h.default.get().is_none() && !matches!(l.event, Event::Doctype { .. }) && self.dtd_text.borrow().is_none() {
             return;
         }
         match &l.event {
@@ -1262,13 +1500,83 @@ impl Shim {
         }
     }
 
-    fn character_data(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        let from_source = if raw.contains('\r') {
-            raw.replace("\r\n", "\n").replace('\r', "\n") == text
+    /// Where libexpat reports `attribute` of the ATTLIST declaration `l`
+    /// (see `decl_trigger`): its position and input offset, and the input
+    /// offset after the declaration.
+    fn attlist_place(&self, l: &Located<'_>, attribute: &str) -> (Position, usize, usize) {
+        let key = (l.raw.as_ptr() as usize, l.raw.len());
+        let mut cache = self.attlist.borrow_mut();
+        if cache.as_ref().is_none_or(|c| c.key != key) {
+            // One pass over the declaration, from default to default.
+            let mut defaults = attlist_defaults(l.raw);
+            defaults.sort_by_key(|&(_, at)| at);
+            let (mut from, mut pos, mut input) = (0, l.span.start, l.input_start);
+            let mut places = HashMap::new();
+            for (name, at) in defaults {
+                pos = pos.advance(&l.raw[from..at]);
+                input += self.input_len(&l.raw[from..at]);
+                from = at;
+                places.entry(name.to_string()).or_insert((pos, input));
+            }
+            let end = input + self.input_len(&l.raw[from..]);
+            *cache = Some(AttlistPlaces { key, places, end });
+        }
+        let c = cache.as_ref().expect("filled above");
+        let (pos, input) = c.places.get(attribute).copied().unwrap_or((l.span.start, l.input_start));
+        (pos, input, c.end)
+    }
+
+    /// After a stop in a CDATA section's start handler, the first token of
+    /// its text, which libexpat still delivers: up to the first `]` after
+    /// the first character or the first line end, or a line end alone.
+    fn cdata_first_token(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+        fn first(s: &str) -> &str {
+            let s = cdata_parts(s)[0];
+            match s.find(['\r', '\n']) {
+                Some(0) => &s[..if s.starts_with("\r\n") { 2 } else { 1 }],
+                Some(eol) => &s[..eol],
+                None => s,
+            }
+        }
+        let t = first(text);
+        let t = if t.starts_with('\r') { "\n" } else { t };
+        if is_source(text, raw) {
+            self.char_piece(t, first(raw), (start, start_input));
         } else {
-            raw == text
-        };
-        if from_source {
+            // From an entity's replacement text: at the reference.
+            self.pos.set(start);
+            self.input_pos.set(start_input);
+            self.deliver_chars(t, raw);
+        }
+    }
+
+    /// Text of a CDATA section: libexpat's tokens there also end before
+    /// each `]` (which may start the closing `]]>`), so its handler gets
+    /// the text in parts, each after the first starting with a `]`.
+    fn cdata_text(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+        if !is_source(text, raw) {
+            // From an entity's replacement text: every part at the reference.
+            for t in cdata_parts(text) {
+                if self.stop_requested.get() {
+                    return;
+                }
+                self.character_data(t, raw, start, start_input);
+            }
+            return;
+        }
+        // Line ends are normalised in `text`, not in `raw`; `]`s line up.
+        let mut at = (start, start_input);
+        for (t, r) in cdata_parts(text).into_iter().zip(cdata_parts(raw)) {
+            if self.stop_requested.get() {
+                return;
+            }
+            self.character_data(t, r, at.0, at.1);
+            at = (at.0.advance(r), at.1 + self.input_len(r));
+        }
+    }
+
+    fn character_data(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+        if is_source(text, raw) {
             let bytes = raw.as_bytes();
             let (mut at, mut piece_start, mut i) = ((start, start_input), 0, 0);
             while i < bytes.len() {
@@ -1499,6 +1807,33 @@ pub unsafe extern "C" fn XML_ParserFree(parser: XML_Parser) {
     }
 }
 
+/// Make the parser as new, as from `XML_ParserCreate*` with `encoding` and
+/// its original memory suite and namespace separator: handlers (but the
+/// unknown-encoding handler, which libexpat keeps), user data and every
+/// setting cleared, an unknown encoding's data released. As in
+/// libexpat, a parser from `XML_ExternalEntityParserCreate` can't be reset;
+/// nor can one from inside its own handler (libexpat leaves that undefined;
+/// here it would free the parser that is calling the handler).
+#[no_mangle]
+pub unsafe extern "C" fn XML_ParserReset(parser: XML_Parser, encoding: *const XML_Char) -> XML_Bool {
+    let fresh = {
+        // SAFETY: see `shim`; encoding is null or a valid C string.
+        let Some(p) = (unsafe { shim(parser) }) else { return XML_FALSE };
+        if p.role != Role::Root || p.core.try_borrow_mut().is_err() {
+            return XML_FALSE;
+        }
+        let fresh = Shim::new(unsafe { c_arg(encoding) }, Some(p.memsuite), p.ns_sep);
+        // libexpat keeps the unknown-encoding handler and its data.
+        fresh.unknown_encoding.set(p.unknown_encoding.get());
+        fresh
+    };
+    // SAFETY: the parser came from XML_ParserCreate_MM and isn't in use (it
+    // isn't parsing, and no reference to it is held here): the old state is
+    // dropped in place and the fresh one written over it.
+    unsafe { *parser = fresh };
+    XML_TRUE
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn XML_Parse(parser: XML_Parser, s: *const c_char, len: c_int, is_final: c_int) -> XML_Status {
     // SAFETY: see `shim`.
@@ -1562,6 +1897,12 @@ pub unsafe extern "C" fn XML_StopParser(parser: XML_Parser, resumable: XML_Bool)
             p.error.set(XML_ERROR_SUSPEND_PE);
             XML_STATUS_ERROR
         }
+        // Between XML_Parse calls, not from a handler: libexpat finishes
+        // the parse there and then, so the next call is XML_ERROR_FINISHED.
+        Status::Parsing if p.core.try_borrow_mut().is_ok() => {
+            p.status.set(Status::Finished);
+            XML_STATUS_OK
+        }
         Status::Parsing => {
             p.stop_error.set(XML_ERROR_ABORTED);
             p.stop_requested.set(true);
@@ -1601,7 +1942,8 @@ pub unsafe extern "C" fn XML_GetCurrentColumnNumber(parser: XML_Parser) -> XML_S
 pub unsafe extern "C" fn XML_GetCurrentByteIndex(parser: XML_Parser) -> XML_Index {
     // In bytes of input, before decoding, as libexpat counts.
     // SAFETY: see `shim`.
-    unsafe { shim(parser) }.map_or(-1, |p| p.input_pos.get() as XML_Index)
+    // -1 before any input, as libexpat.
+    unsafe { shim(parser) }.map_or(-1, |p| if p.status.get() == Status::NotStarted { -1 } else { p.input_pos.get() as XML_Index })
 }
 
 #[no_mangle]
@@ -1998,5 +2340,49 @@ mod layout {
         // SAFETY: Shim is repr(C) with a Cell<*mut c_void> (repr(transparent))
         // first, so reading a pointer at its address reads user_data.
         assert_eq!(unsafe { *raw }, sentinel);
+    }
+}
+
+/// Inputs whose cost could grow faster than their size, as in the core
+/// crate's tests/resource_tests.rs: the size took tens of seconds with the
+/// old code; the assertions check behaviour, not timing.
+#[cfg(test)]
+mod resources {
+    use super::*;
+
+    static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn attlist(
+        _: *mut c_void,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: *const XML_Char,
+        _: c_int,
+    ) {
+        COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[test]
+    fn one_attlist_declaring_many_attributes() {
+        // Each attribute's position was worked out from the declaration's
+        // start: 64,000 attributes took ~40 s.
+        let n = 64_000;
+        let mut doc = String::from("<!DOCTYPE r [<!ATTLIST r");
+        for i in 0..n {
+            doc.push_str(&format!("\n a{i} CDATA #IMPLIED"));
+        }
+        doc.push_str(">]><r/>");
+        // SAFETY: a parser created, used and freed here, with a valid
+        // buffer and a handler of the right type.
+        unsafe {
+            let p = XML_ParserCreate(ptr::null());
+            XML_SetAttlistDeclHandler(p, Some(attlist));
+            let status = XML_Parse(p, doc.as_ptr().cast(), doc.len() as c_int, 1);
+            assert_eq!(status, XML_STATUS_OK);
+            assert_eq!(XML_GetCurrentLineNumber(p), n as XML_Size + 1);
+            XML_ParserFree(p);
+        }
+        assert_eq!(COUNT.load(std::sync::atomic::Ordering::Relaxed), n);
     }
 }

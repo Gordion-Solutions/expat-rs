@@ -8,7 +8,8 @@
 #   --full      also run CPython's whole test suite on expat-capi
 #
 # Needs git, a C compiler, cargo, and (for the comparison run) an
-# installed libexpat: LIBEXPAT_PREFIX, or `brew --prefix expat`.
+# installed libexpat 2.6 or later: its library directory in
+# LIBEXPAT_LIBDIR, or LIBEXPAT_PREFIX/lib, or `brew --prefix expat`/lib.
 set -euo pipefail
 work=${1:?usage: cpython.sh <work dir> [branch] [--full]}
 branch=${2:-3.14}
@@ -38,20 +39,30 @@ python=./python
 
 tests=(test_pyexpat test_xml_etree test_xml_etree_c test_sax test_minidom test_pulldom
        test_xml_dom_minicompat test_xml_dom_xmlbuilder test_plistlib test_xmlrpc test_docxmlrpc)
+# Keep going after failures, so the comparison run always happens; the
+# exit status says whether expat-capi's run passed.
+status=0
 echo "== XML tests on expat-capi"
-"$python" -m test -j4 "${tests[@]}"
+"$python" -m test -j4 "${tests[@]}" || status=$?
 
-prefix=${LIBEXPAT_PREFIX:-$(brew --prefix expat 2>/dev/null || true)}
-if [ -n "$prefix" ] && [ -d "$prefix/lib" ]; then
-  echo "== XML tests on libexpat ($prefix)"
+libdir=${LIBEXPAT_LIBDIR:-}
+if [ -z "$libdir" ]; then
+  prefix=${LIBEXPAT_PREFIX:-$(brew --prefix expat 2>/dev/null || true)}
+  [ -n "$prefix" ] && libdir="$prefix/lib"
+fi
+if [ -n "$libdir" ] && [ -d "$libdir" ]; then
+  echo "== XML tests on libexpat ($libdir)"
   if [ "$(uname)" = Darwin ]; then
-    DYLD_LIBRARY_PATH="$prefix/lib" "$python" -m test -j4 "${tests[@]}"
+    DYLD_LIBRARY_PATH="$libdir" "$python" -c "import pyexpat; print('pyexpat on', pyexpat.EXPAT_VERSION)"
+    DYLD_LIBRARY_PATH="$libdir" "$python" -m test -j4 "${tests[@]}" || true
   else
-    LD_LIBRARY_PATH="$prefix/lib" "$python" -m test -j4 "${tests[@]}"
+    LD_LIBRARY_PATH="$libdir" "$python" -c "import pyexpat; print('pyexpat on', pyexpat.EXPAT_VERSION)"
+    LD_LIBRARY_PATH="$libdir" "$python" -m test -j4 "${tests[@]}" || true
   fi
 fi
 
 if [ "$full" = --full ]; then
   echo "== whole test suite on expat-capi"
-  "$python" -m test -j"$(getconf _NPROCESSORS_ONLN)" --timeout 900
+  "$python" -m test -j"$(getconf _NPROCESSORS_ONLN)" --timeout 900 || status=$?
 fi
+exit $status
