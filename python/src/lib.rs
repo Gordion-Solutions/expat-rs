@@ -77,6 +77,12 @@ const HANDLERS: [(&str, H); 22] = [
     ("SkippedEntityHandler", H::SkippedEntity),
 ];
 
+/// A Python handler and which one it is (for the traceback frame).
+struct Handler {
+    obj: Py<PyAny>,
+    which: H,
+}
+
 fn handler_index(name: &str) -> Option<H> {
     HANDLERS.iter().find(|(n, _)| *n == name).map(|&(_, h)| h)
 }
@@ -159,8 +165,8 @@ impl XmlParser {
         }
     }
 
-    fn handler(&self, py: Python<'_>, h: H) -> Option<Py<PyAny>> {
-        self.handlers.borrow()[h as usize].as_ref().map(|o| o.clone_ref(py))
+    fn handler(&self, py: Python<'_>, h: H) -> Option<Handler> {
+        self.handlers.borrow()[h as usize].as_ref().map(|o| Handler { obj: o.clone_ref(py), which: h })
     }
 
     fn failed(&self) -> bool {
@@ -178,7 +184,7 @@ impl XmlParser {
 
     /// The Python handler to call for `h`, after delivering any buffered
     /// character data; None when there is none or a handler has failed.
-    fn ready(&self, py: Python<'_>, h: H) -> Option<Py<PyAny>> {
+    fn ready(&self, py: Python<'_>, h: H) -> Option<Handler> {
         if self.failed() {
             return None;
         }
@@ -191,17 +197,17 @@ impl XmlParser {
     }
 
     /// Calls a handler, recording any exception it raises.
-    fn call<'py, A>(&self, py: Python<'py>, handler: &Py<PyAny>, args: A) -> Option<Bound<'py, PyAny>>
+    fn call<'py, A>(&self, py: Python<'py>, handler: &Handler, args: A) -> Option<Bound<'py, PyAny>>
     where
         A: pyo3::call::PyCallArgs<'py>,
     {
         let was = self.in_callback.replace(true);
-        let result = handler.bind(py).call1(args);
+        let result = handler.obj.bind(py).call1(args);
         self.in_callback.set(was);
         match result {
             Ok(v) => Some(v),
             Err(e) => {
-                self.fail(e);
+                self.fail(with_handler_frame(py, handler.which, e));
                 None
             }
         }
@@ -270,6 +276,16 @@ impl XmlParser {
                 H::SkippedEntity => XML_SetSkippedEntityHandler(p, pick!(cb_skipped_entity)),
             }
         }
+    }
+
+    /// An ExpatError for a bad argument, as XML_ERROR_INVALID_ARGUMENT.
+    fn argument_error(&self, py: Python<'_>, message: &str) -> PyErr {
+        let err = ExpatError::new_err(message.to_owned());
+        let value = err.value(py);
+        let _ = value.setattr("code", XML_ERROR_INVALID_ARGUMENT);
+        let _ = value.setattr("lineno", self.error_line_number());
+        let _ = value.setattr("offset", self.error_column_number());
+        err
     }
 
     /// The ExpatError for the parser's current error.
@@ -467,15 +483,35 @@ unsafe extern "C" fn cb_default_expand(ud: *mut c_void, s: *const c_char, len: c
     })
 }
 
+/// A handler's integer result. Anything else is a TypeError, noted with
+/// the handler's name from Python 3.15 as there.
+fn handler_int(py: Python<'_>, this: &XmlParser, h: H, v: &Bound<'_, PyAny>) -> c_int {
+    let result = if v.is_instance_of::<pyo3::types::PyInt>() {
+        v.extract::<c_int>()
+    } else {
+        Err(PyTypeError::new_err(format!(
+            "'{}' object cannot be interpreted as an integer",
+            v.get_type().name().map(|n| n.to_string()).unwrap_or_default()
+        )))
+    };
+    match result {
+        Ok(rc) => rc,
+        Err(e) => {
+            if py.version_info() >= (3, 15) {
+                let note = format!("invalid '{}' event handler return value", frame_name(h));
+                let _ = e.value(py).call_method1("add_note", (note,));
+            }
+            this.fail(e);
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn cb_not_standalone(ud: *mut c_void) -> c_int {
     with_parser(ud, |py, this| {
         let Some(h) = this.ready(py, H::NotStandalone) else { return 0 };
-        match this.call(py, &h, ()).map(|v| v.extract::<c_int>()) {
-            Some(Ok(v)) => v,
-            Some(Err(e)) => {
-                this.fail(e);
-                0
-            }
+        match this.call(py, &h, ()) {
+            Some(v) => handler_int(py, this, H::NotStandalone, &v),
             None => 0,
         }
     })
@@ -494,14 +530,7 @@ unsafe extern "C" fn cb_external_entity_ref(
     with_parser(ud, |py, this| {
         let Some(h) = this.ready(py, H::ExternalEntityRef) else { return 0 };
         match this.call(py, &h, (text(context), text(base), text(system_id), text(public_id))) {
-            Some(v) if v.is_none() => 0,
-            Some(v) => match v.extract::<c_int>() {
-                Ok(rc) => rc,
-                Err(e) => {
-                    this.fail(e);
-                    0
-                }
-            },
+            Some(v) => handler_int(py, this, H::ExternalEntityRef, &v),
             None => 0,
         }
     })
@@ -561,15 +590,43 @@ unsafe extern "C" fn cb_xml_decl(ud: *mut c_void, version: *const c_char, encodi
 }
 
 /// A content model as `pyexpat` gives it: (type, quantifier, name, children).
-fn model_tuple<'py>(py: Python<'py>, this: &XmlParser, node: &XML_Content) -> PyResult<Bound<'py, PyTuple>> {
-    let mut children = Vec::with_capacity(node.numchildren as usize);
-    for i in 0..node.numchildren as usize {
-        // SAFETY: `children` has `numchildren` entries.
-        let child = unsafe { &*node.children.add(i) };
-        children.push(model_tuple(py, this, child)?);
+///
+/// Built without recursion; a model nested deeper than Python's recursion
+/// limit raises RecursionError, as pyexpat's recursive conversion does.
+fn model_tuple<'py>(py: Python<'py>, this: &XmlParser, root: &XML_Content) -> PyResult<Bound<'py, PyTuple>> {
+    let limit: usize = py.import("sys")?.call_method0("getrecursionlimit")?.extract()?;
+    // Each frame: a node and the tuples built so far for its children.
+    let mut stack: Vec<(&XML_Content, Vec<Bound<'py, PyAny>>)> = vec![(root, Vec::new())];
+    loop {
+        let depth = stack.len();
+        let (node, done) = stack.last_mut().expect("never empty here");
+        let node: &XML_Content = node;
+        if done.len() < node.numchildren as usize {
+            if depth >= limit {
+                return Err(pyo3::exceptions::PyRecursionError::new_err(
+                    "maximum recursion depth exceeded while converting a content model",
+                ));
+            }
+            // SAFETY: `children` has `numchildren` entries.
+            let child = unsafe { &*node.children.add(done.len()) };
+            stack.push((child, Vec::new()));
+            continue;
+        }
+        let (node, children) = stack.pop().expect("checked above");
+        let tuple = PyTuple::new(
+            py,
+            [
+                node.type_.into_pyobject(py)?.into_any(),
+                node.quant.into_pyobject(py)?.into_any(),
+                this.name(py, node.name)?,
+                PyTuple::new(py, children)?.into_any(),
+            ],
+        )?;
+        match stack.last_mut() {
+            Some((_, parent_done)) => parent_done.push(tuple.into_any()),
+            None => return Ok(tuple),
+        }
     }
-    let name = this.name(py, node.name)?;
-    PyTuple::new(py, [node.type_.into_pyobject(py)?.into_any(), node.quant.into_pyobject(py)?.into_any(), name, PyTuple::new(py, children)?.into_any()])
 }
 
 unsafe extern "C" fn cb_element_decl(ud: *mut c_void, name: *const c_char, model: *mut XML_Content) {
@@ -622,6 +679,85 @@ unsafe extern "C" fn cb_skipped_entity(ud: *mut c_void, name: *const c_char, is_
     })
 }
 
+/// The byte map for an encoding Python knows: each byte decoded on its own
+/// (U+FFFD for bytes the codec rejects). Multi-byte encodings aren't
+/// supported, as in CPython up to 3.15.
+fn byte_map(py: Python<'_>, name: &str) -> PyResult<[c_int; 256]> {
+    let all: Vec<u8> = (0..=255).collect();
+    let decoded = PyBytes::new(py, &all).call_method1("decode", (name, "replace"))?;
+    let decoded: String = decoded.extract()?;
+    if decoded.chars().count() != 256 {
+        return Err(PyValueError::new_err("multi-byte encodings are not supported"));
+    }
+    let mut map = [0; 256];
+    for (slot, c) in map.iter_mut().zip(decoded.chars()) {
+        *slot = if c == '\u{FFFD}' { -1 } else { c as c_int };
+    }
+    Ok(map)
+}
+
+unsafe extern "C" fn cb_unknown_encoding(ud: *mut c_void, name: *const c_char, info: *mut XML_Encoding) -> c_int {
+    with_parser(ud, |py, this| {
+        let name = text(name).unwrap_or_default();
+        match byte_map(py, &name) {
+            Ok(map) => {
+                // SAFETY: `info` is the parser's XML_Encoding to fill in.
+                unsafe {
+                    (*info).map = map;
+                    (*info).data = ptr::null_mut();
+                    (*info).convert = None;
+                    (*info).release = None;
+                }
+                1
+            }
+            Err(e) => {
+                this.fail(e);
+                0
+            }
+        }
+    })
+}
+
+/// A non-negative int that fits C's unsigned long long, with the errors
+/// CPython's argument conversion gives.
+fn unsigned_long_long(v: &Bound<'_, PyAny>) -> PyResult<u64> {
+    if !v.is_instance_of::<pyo3::types::PyInt>() {
+        return Err(PyTypeError::new_err(format!("'{}' object cannot be interpreted as an integer", v.get_type().name()?)));
+    }
+    if v.lt(0)? {
+        return Err(PyValueError::new_err("Cannot convert negative int"));
+    }
+    v.extract::<u64>()
+        .map_err(|_| pyo3::exceptions::PyOverflowError::new_err("Python int too large for C unsigned long long"))
+}
+
+/// The name pyexpat gives a handler's frame in tracebacks.
+fn frame_name(h: H) -> &'static str {
+    let (name, _) = HANDLERS[h as usize];
+    name.strip_suffix("Handler").unwrap_or(name)
+}
+
+/// Adds a frame for the handler, as `Modules/pyexpat.c`, between the
+/// handler's own frames and the caller of `Parse`, as CPython's pyexpat
+/// does, so tracebacks show which handler raised.
+fn with_handler_frame(py: Python<'_>, h: H, err: PyErr) -> PyErr {
+    let add = || -> PyResult<PyErr> {
+        let name = frame_name(h);
+        let source = format!("def {name}():\n    return __import__('sys')._getframe()\n");
+        let builtins = py.import("builtins")?;
+        let code = builtins.call_method1("compile", (source, "Modules/pyexpat.c", "exec"))?;
+        let namespace = PyDict::new(py);
+        builtins.call_method1("exec", (code, &namespace))?;
+        let frame = namespace.get_item(name)?.expect("defined above").call0()?;
+        let tb_type = py.import("types")?.getattr("TracebackType")?;
+        let tb = tb_type.call1((err.traceback(py), &frame, frame.getattr("f_lasti")?, frame.getattr("f_lineno")?))?;
+        let value = err.value(py).call_method1("with_traceback", (tb,))?;
+        // A new PyErr from the value, so the new traceback is the one raised.
+        Ok(PyErr::from_value(value))
+    };
+    add().unwrap_or(err)
+}
+
 /// Creates the Python object for a C parser and points the parser's user
 /// data at it.
 fn make_parser(
@@ -640,7 +776,10 @@ fn make_parser(
     };
     // SAFETY: the object's data never moves while it lives, and the parser
     // is freed (in Drop) before the object goes.
-    unsafe { XML_SetUserData(itself, addr) };
+    unsafe {
+        XML_SetUserData(itself, addr);
+        XML_SetUnknownEncodingHandler(itself, Some(cb_unknown_encoding), addr);
+    }
     Ok(obj)
 }
 
@@ -760,6 +899,38 @@ impl XmlParser {
         self.reparse_deferral.set(enabled);
     }
 
+    /// SetBillionLaughsAttackProtectionActivationThreshold(threshold): input
+    /// size from which the amplification limit applies.
+    #[pyo3(name = "SetBillionLaughsAttackProtectionActivationThreshold")]
+    fn set_bl_activation_threshold(&self, py: Python<'_>, threshold: &Bound<'_, PyAny>) -> PyResult<()> {
+        let threshold = unsigned_long_long(threshold)?;
+        // SAFETY: the parser is live.
+        let ok = unsafe { XML_SetBillionLaughsAttackProtectionActivationThreshold(self.itself.get(), threshold) };
+        if ok == 0 {
+            return Err(self.argument_error(py, "parser must be a root parser"));
+        }
+        Ok(())
+    }
+
+    /// SetBillionLaughsAttackProtectionMaximumAmplification(max_factor):
+    /// the largest allowed ratio of expanded to direct input.
+    #[pyo3(name = "SetBillionLaughsAttackProtectionMaximumAmplification")]
+    fn set_bl_maximum_amplification(&self, py: Python<'_>, max_factor: &Bound<'_, PyAny>) -> PyResult<()> {
+        if max_factor.is_instance_of::<PyString>() || max_factor.is_none() {
+            return Err(PyTypeError::new_err(format!("must be real number, not {}", max_factor.get_type().name()?)));
+        }
+        let factor: f64 = max_factor.extract()?;
+        if self.parent.is_some() {
+            return Err(self.argument_error(py, "parser must be a root parser"));
+        }
+        if factor.is_nan() || factor < 1.0 {
+            return Err(self.argument_error(py, "'max_factor' must be at least 1.0"));
+        }
+        // SAFETY: the parser is live.
+        unsafe { XML_SetBillionLaughsAttackProtectionMaximumAmplification(self.itself.get(), factor as f32) };
+        Ok(())
+    }
+
     /// ExternalEntityParserCreate(context, encoding=None): a parser for an
     /// external entity referenced from this document.
     #[pyo3(name = "ExternalEntityParserCreate", signature = (context, encoding = None))]
@@ -789,6 +960,7 @@ impl XmlParser {
                 *c.buffer.borrow_mut() = Some(String::new());
             }
             c.ordered_attributes.set(this.ordered_attributes.get());
+            c.reparse_deferral.set(this.reparse_deferral.get());
             c.specified_attributes.set(this.specified_attributes.get());
             // The child starts with the parent's handlers.
             for (i, h) in this.handlers.borrow().iter().enumerate() {
@@ -876,14 +1048,18 @@ impl XmlParser {
     }
 
     /// Handler attributes, which aren't descriptors.
-    fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+    fn __getattr__(&self, py: Python<'_>, name: &Bound<'_, PyString>) -> PyResult<Py<PyAny>> {
+        let name = name.to_string_lossy();
+        let name = name.as_ref();
         match handler_index(name) {
-            Some(h) => Ok(self.handler(py, h).unwrap_or_else(|| py.None())),
+            Some(h) => Ok(self.handler(py, h).map_or_else(|| py.None(), |h| h.obj)),
             None => Err(PyAttributeError::new_err(format!("'xmlparser' object has no attribute '{name}'"))),
         }
     }
 
-    fn __setattr__(&self, py: Python<'_>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn __setattr__(&self, py: Python<'_>, name: &Bound<'_, PyString>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let name = name.to_string_lossy();
+        let name = name.as_ref();
         if let Some(h) = handler_index(name) {
             let on = !value.is_none();
             // The character buffer belongs to the old handler.
@@ -905,9 +1081,16 @@ impl XmlParser {
                 }
             }
             "buffer_size" => {
-                let size: i64 = value
-                    .extract()
-                    .map_err(|_| PyTypeError::new_err("buffer_size must be an integer"))?;
+                if !value.is_instance_of::<pyo3::types::PyInt>() {
+                    return Err(PyTypeError::new_err(format!(
+                        "'{}' object cannot be interpreted as an integer",
+                        value.get_type().name()?
+                    )));
+                }
+                let size: i64 = value.extract()?;
+                if size > i32::MAX as i64 {
+                    return Err(PyValueError::new_err(format!("buffer_size must not be greater than {}", i32::MAX)));
+                }
                 if size <= 0 {
                     return Err(PyValueError::new_err("buffer_size must be greater than zero"));
                 }
