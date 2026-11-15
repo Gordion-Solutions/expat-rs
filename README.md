@@ -10,7 +10,9 @@ memory-safety bugs.
 
 Project page: <https://gordionsolutions.co.uk/software/#expat-rs>
 
-> **Status:** early development. Well-formedness checking, DOCTYPE /
+> **Status:** released, 0.3.0 on
+> [crates.io](https://crates.io/crates/expat-rs); in active development.
+> Shipped: well-formedness checking, DOCTYPE /
 > internal-subset handling, entity expansion with billion-laughs /
 > quadratic-blowup defences, opt-in external entity loading, UTF-8 /
 > UTF-16 / ASCII / Latin-1 decoding, and events carrying the document's
@@ -23,9 +25,11 @@ Project page: <https://gordionsolutions.co.uk/software/#expat-rs>
 > chunks (`StreamParser`, like libexpat's `XML_Parse`), with identical
 > results. Hardened against hostile input (linear time on all inputs,
 > bounded entity expansion, no external reads by default) and fuzzed;
-> currently 0.56-0.79x libexpat's throughput. Not yet built: the
-> external DTD subset and parameter-entity expansion, DTD validation, and
-> the libexpat C ABI. See `conformance/STATUS.md`.
+> currently 0.56-0.79x libexpat's throughput. A libexpat-compatible C
+> library, [`expat-capi`](expat-capi/), is built on it: CPython's XML and
+> whole test suites pass on it, as do Android's uses of libexpat. Not yet
+> built: the external DTD subset and parameter-entity expansion, and DTD
+> validation. See `conformance/STATUS.md`.
 
 ## What this is
 
