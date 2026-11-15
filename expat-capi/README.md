@@ -46,7 +46,7 @@ See [CPYTHON_STATUS.md](CPYTHON_STATUS.md) for the full record and
 
 CPython 3.14 builds against expat-capi (`./configure --with-system-expat
 LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
--Wl,-rpath,<staged dir> -lexpat"`) and, on 21 Oct 2026 (macOS, debug build):
+-Wl,-rpath,<staged dir> -lexpat"`) and, on 15 Nov 2026 (macOS, debug build):
 
 - its 11 XML test files (`test_pyexpat`, `test_xml_etree`, `test_xml_etree_c`,
   `test_sax`, `test_minidom`, `test_pulldom`, `test_xml_dom_minicompat`,
@@ -76,9 +76,8 @@ column) and the exit status were identical in all 4272 runs.
 `tools/xmlwf_suite.py` runs libexpat's own `xmlwf` (a dynamically linked
 build, such as Homebrew's) over the W3C conformance suite on libexpat and on
 expat-capi and compares exit status, messages and written output in five
-modes. On 21 Oct 2026, 2638 files: every document libexpat accepts gives
-identical output; no document libexpat
-rejects is accepted (since 23 Oct, no verdict differs at all); about 1050 malformed documents get a different error
+modes. On 15 Nov 2026, 2638 files: every document libexpat accepts gives
+identical output, no verdict differs, and about 1050 malformed documents get a different error
 message or position (see below).
 
 `src/generated.rs` (constants, error strings, struct sizes) is generated

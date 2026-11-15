@@ -7,8 +7,9 @@ known to differ.
 
 ## Result
 
-CPython 3.14 (branch head `8e382c3`, 21 Oct 2026; debug build, macOS 13.7
-x86_64, Apple clang 14) built with `--with-system-expat` against expat-capi:
+CPython 3.14 (branch head `8e382c3`; debug build, macOS 13.7 x86_64, Apple
+clang 14) built with `--with-system-expat` against expat-capi, last run on
+15 Nov 2026 (expat-capi at `cfcd0fe`):
 
 | Run | Result |
 | --- | --- |
@@ -16,15 +17,15 @@ x86_64, Apple clang 14) built with `--with-system-expat` against expat-capi:
 | The same tests on libexpat 2.8.2 (same build) | 1088 pass, the same 36 skipped |
 | CPython's whole test suite on expat-capi | 47,976 tests pass (529 files run; the rest skipped or needing resources not enabled) |
 
-Other versions and platforms (23 Oct 2026; XML test files, expat-capi and
-libexpat side by side, same skips on both):
+Other versions and platforms (XML test files, expat-capi and libexpat side by
+side, same skips on both; 14 Nov 2026 unless dated):
 
 | CPython | Platform | expat-capi | libexpat |
 | --- | --- | --- | --- |
 | 3.13 | macOS 13.7 x86_64 | 1087 pass | 1087 pass (2.8.2) |
 | 3.14 | macOS 13.7 x86_64 | 1088 pass | 1088 pass (2.8.2) |
-| 3.14 | Linux (Debian trixie, x86_64, gcc) | 1088 pass | 1088 pass (2.9.0) |
-| 3.14, AddressSanitizer build | Linux (Debian trixie, x86_64, gcc) | 1088 pass, no sanitizer reports | |
+| 3.14 (`9695071`) | Linux (Debian trixie, x86_64, gcc) | 1095 pass | 1095 pass (2.8.2) |
+| 3.14, AddressSanitizer build (23 Oct 2026) | Linux (Debian trixie, x86_64, gcc) | 1088 pass, no sanitizer reports | |
 | 3.15 (3.15.1+) | macOS 13.7 x86_64 | 1103 pass | 1103 pass (2.8.2) |
 | main (3.16.0a1+, `b1e32ff`) | macOS 13.7 x86_64 | 1179 pass | 1179 pass (2.8.2) |
 
