@@ -1,0 +1,28 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "expat-rs"
+description = "Memory-safe drop-in for Python's XML parser (xml.parsers.expat), built on expat-rs"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Gordion Solutions" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Text Processing :: Markup :: XML",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/Gordion-Solutions/expat-rs"
+Homepage = "https://gordionsolutions.co.uk/software/#expat-rs"
+
+[tool.maturin]
+python-source = "python"
+module-name = "expat_rs._pyexpat"
+features = ["extension-module"]

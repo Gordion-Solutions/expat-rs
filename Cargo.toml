@@ -11,7 +11,7 @@ documentation = "https://docs.rs/expat-rs"
 readme = "README.md"
 keywords = ["xml", "parser", "expat", "memory-safety"]
 categories = ["parser-implementations"]
-exclude = [".github/", "bench/", "capi/", "expat-capi/", "Android.bp"]
+exclude = [".github/", "bench/", "capi/", "expat-capi/", "python/", "Android.bp"]
 
 [dependencies]
 thiserror = "1.0"
@@ -25,3 +25,5 @@ path = "src/bin/xmlwf.rs"
 
 [workspace]
 members = [".", "expat-capi"]
+# Built by maturin with its own lockfile and toolchain needs.
+exclude = ["python"]

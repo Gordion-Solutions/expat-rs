@@ -36,7 +36,8 @@ use expat_rs::{
     AmplificationLimits, ContentKind, ContentModel, Edition, EncodingMap, EntityContext, ErrorKind, Event, Located, MapEntry, Position, Quantifier, Span,
     StreamParser, XmlError,
 };
-use generated::*;
+// Public for Rust callers in the same build (the Python package).
+pub use generated::*;
 
 // ─── C types (layouts as in include/expat.h) ──────────────────────────────
 
@@ -51,8 +52,8 @@ pub type XML_Parser = *mut Shim;
 
 const XML_PARAM_ENTITY_PARSING_NEVER: c_int = 0;
 const XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: c_int = 1;
-const XML_TRUE: XML_Bool = 1;
-const XML_FALSE: XML_Bool = 0;
+pub const XML_TRUE: XML_Bool = 1;
+pub const XML_FALSE: XML_Bool = 0;
 const XML_STATUS_ERROR: XML_Status = 0;
 const XML_STATUS_OK: XML_Status = 1;
 
