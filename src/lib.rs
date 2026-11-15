@@ -1,7 +1,7 @@
-//! expat-rs — a memory-safe XML 1.0 parser, built clean-room from the W3C
-//! specifications, aiming for libexpat's conformance without C's
-//! memory-safety bugs. See `METHODOLOGY.md` at the crate root for the
-//! clean-room declaration.
+//! expat-rs — a memory-safe XML 1.0 parser, written independently from the
+//! W3C specifications, aiming for libexpat's conformance without C's
+//! memory-safety bugs. See `METHODOLOGY.md` at the crate root for how it
+//! was written.
 //!
 //! # Parsing a document
 //!
