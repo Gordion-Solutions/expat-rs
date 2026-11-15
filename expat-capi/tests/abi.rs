@@ -10,19 +10,37 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The directory holding the libexpat.a built for this test run: the test
-/// executable's own (`target/<profile>/deps/`). Not `target/<profile>/`,
-/// which only `cargo build` updates, so it may hold a stale library.
-fn lib_dir() -> PathBuf {
+/// The libexpat.a built for this test run. Not `target/<profile>/`'s, which
+/// only `cargo build` updates, so it may be stale.
+///
+/// Up to Rust 1.99 it is next to the test executable, in
+/// `target/<profile>/deps/`. From 1.100 every compiled unit has its own
+/// `target/<profile>/build/<package>/<hash>/out/`, the test executable in
+/// one and the library in another: then it is the most recently built
+/// library of this package, the one `cargo test` just compiled or found up
+/// to date.
+fn static_lib() -> PathBuf {
     let exe = std::env::current_exe().expect("test executable path");
-    exe.parent().expect("target/<profile>/deps").to_path_buf()
+    let dir = exe.parent().expect("test executable's directory");
+    let beside = dir.join("libexpat.a");
+    if beside.exists() {
+        return beside;
+    }
+    let package = dir.parent().and_then(Path::parent).expect("target/<profile>/build/<package>/");
+    let built = |p: &PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    std::fs::read_dir(package)
+        .map(|units| units.flatten().map(|u| u.path().join("out/libexpat.a")).filter(|p| p.exists()).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .max_by_key(built)
+        .unwrap_or(beside)
 }
 
 fn check_probe(name: &str) {
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     let src = here.join("tests/c").join(format!("{name}.c"));
     let expected = std::fs::read_to_string(here.join("tests/c").join(format!("{name}.expected"))).expect("expected output");
-    let lib = lib_dir().join("libexpat.a");
+    let lib = static_lib();
     assert!(lib.exists(), "{} not built", lib.display());
     let out_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let exe = out_dir.join(name);
