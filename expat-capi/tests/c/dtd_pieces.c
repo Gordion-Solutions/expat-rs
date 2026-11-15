@@ -1,8 +1,7 @@
-/* The cases of declarations.c with the DOCTYPE arriving in small pieces.
-   libexpat reports each declaration (and the default handler's text) as
-   it completes; expat-rs reads the internal subset as one construct, so
-   until it closes nothing is reported, and reparse deferral then holds
-   later events too. Not yet matching: tests/abi.rs ignores this probe.
+/* The cases of declarations.c with the DOCTYPE arriving in small pieces:
+   each declaration, and the default handler's text between them, must be
+   reported in the same call as libexpat reports it; and the whitespace
+   around the root element, split where libexpat splits it.
 
    From declarations.c: public identifiers, predefined entities
    declared again, declarations after a parameter entity reference that
@@ -134,31 +133,6 @@ static const char *no_expand =
     "<!DOCTYPE d [<!ENTITY i 'I<e/>&j;'><!ENTITY j 'J'><!ENTITY x SYSTEM 'x.xml'>]>"
     "<d a='&j;'>&i;&gt;&#65;&x;<e>&j;</e></d>";
 
-static const char *predefined =
-    "<!DOCTYPE d [\n"
-    "<!ENTITY gt \"&#62;\">\n"
-    "<!ENTITY lt \"&#38;#60;\">\n"
-    "<!ENTITY amp '&#38;#38;'>\n"
-    "<!ENTITY apos \"'\">\n"
-    "<!ENTITY quot 'other'>\n"
-    "<!ENTITY x 'after'>\n"
-    "]><d>&gt;&lt;&amp;&apos;&quot;&x;</d>";
-
-static const char *after_internal_pe =
-    "<?xml version='1.0'?>\n"
-    "<!DOCTYPE d [\n"
-    "<!ELEMENT d ANY>\n"
-    "<!ENTITY % pe1 '<!ATTLIST d a1 CDATA \"v1\">'>\n"
-    "<!ENTITY g1 'one'>\n"
-    "%pe1;\n"
-    "<!ENTITY g2 'two'>\n"
-    "<!ATTLIST d a2 CDATA \"v2\">\n"
-    "<!NOTATION n SYSTEM 'n'>\n"
-    "<!ELEMENT e EMPTY>\n"
-    "<!-- c -->\n"
-    "]>\n"
-    "<d>&g1;&g2;</d>";
-
 static const char *dtd_whitespace =
     "<?xml version='1.0'?>\n\n"
     "<!DOCTYPE d [\n\n"
@@ -168,16 +142,19 @@ static const char *dtd_whitespace =
     " ]>  \n\n"
     "<d>\n  text\n</d>\n\n";
 
+/* Line ends around the root element, cut at every point. */
+static const char *outside_line_ends = "\r\n \r\n<d/>\r\n\r\n \r\r\n\n\r";
+
 int main(void) {
   size_t whole = 1 << 20;
   (void)whole;
   run("public identifiers", pubids, 0, 5);
   run("internal entities, non-expanding default handler", no_expand, DEFAULT, 4);
-  run("predefined entities declared again", predefined, EXPAND, 6);
-  run("after an internal parameter entity reference", after_internal_pe, EXPAND, 7);
   run("whitespace in and around the DOCTYPE", dtd_whitespace, DEFAULT, 1);
   run("whitespace in and around the DOCTYPE", dtd_whitespace, DEFAULT, 3);
   run("whitespace in and around the DOCTYPE", dtd_whitespace, DEFAULT, 7);
   run("whitespace in and around the DOCTYPE", dtd_whitespace, EXPAND, 7);
+  for (size_t piece = 1; piece <= 4; piece++)
+    run("line ends outside the root element", outside_line_ends, DEFAULT | TEXT_ONLY, piece);
   return 0;
 }

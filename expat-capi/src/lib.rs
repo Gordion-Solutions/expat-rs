@@ -185,15 +185,8 @@ impl Handlers {
     }
 }
 
-/// A DOCTYPE's source text and how far into it the default handler has
-/// been given what no other handler took.
-struct DtdText {
-    raw: String,
-    /// Where it starts in the document (decoded byte offset).
-    start: usize,
-    /// Offset in `raw` up to which it has been dealt with.
-    cursor: usize,
-}
+/// An external entity's system and public identifiers.
+type ExternalIds = (Option<CString>, Option<CString>);
 
 /// What kind of parser a `Shim` is.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -298,7 +291,11 @@ pub struct Shim {
     /// While a DOCTYPE is delivered and a default handler is set: its
     /// source text, so the parts no handler takes can go to the default
     /// handler.
-    dtd_text: RefCell<Option<DtdText>>,
+    /// Inside the DOCTYPE: whether it has an internal subset.
+    in_doctype: Cell<Option<bool>>,
+    /// The declaration (its span's byte offsets) whose text the default
+    /// handler was last given: an ATTLIST's attributes share one.
+    decl_span: Cell<Option<(usize, usize)>>,
     /// The DOCTYPE's external identifiers, once seen: (system, public).
     doctype_ids: RefCell<Option<(Option<CString>, Option<CString>)>>,
     /// The foreign DTD (`XML_UseForeignDTD`) has been asked for.
@@ -314,7 +311,7 @@ pub struct Shim {
     dtd_processing: Cell<bool>,
     /// The external parameter entities declared so far: system and public
     /// identifiers (None for an internal one).
-    param_entities: RefCell<HashMap<String, Option<(Option<CString>, Option<CString>)>>>,
+    param_entities: RefCell<HashMap<String, Option<ExternalIds>>>,
     /// The start of the input (up to 1 KiB), from which the XML declaration
     /// is read early when the document's encoding is unknown, and whether
     /// that was delivered (see `early_xml_decl`).
@@ -400,7 +397,8 @@ impl Shim {
             entity_contexts: RefCell::new(std::collections::HashMap::new()),
             last_entity_context: RefCell::new(None),
             doctype_ids: RefCell::new(None),
-            dtd_text: RefCell::new(None),
+            in_doctype: Cell::new(None),
+            decl_span: Cell::new(None),
             foreign_dtd_done: Cell::new(false),
             declared_entities: RefCell::new(HashSet::new()),
             ignored_decl: Cell::new(false),
@@ -1417,7 +1415,9 @@ impl Shim {
                 // With no handler, libexpat passes the reference to the
                 // default handler (ElementTree relies on this).
                 let Some(f) = h.external_entity_ref.get() else {
-                    self.to_default(l.raw);
+                    // The reference itself, also when it was reached through
+                    // internal entities (`l.raw` is then the outermost one).
+                    self.to_default(&format!("&{name};"));
                     return;
                 };
                 {
@@ -1474,72 +1474,41 @@ impl Shim {
     /// internal subset).
     fn dtd_default(&self, l: &Located<'_>) {
         let h = &self.handlers;
-        if h.default.get().is_none() && !matches!(l.event, Event::Doctype { .. }) && self.dtd_text.borrow().is_none() {
-            return;
-        }
         match &l.event {
-            Event::Doctype { .. } => {
-                let header_len = doctype_header_len(l.raw);
-                let has_subset = l.raw[..header_len].ends_with('[');
-                if h.start_doctype.get().is_none() {
-                    let mut header = &l.raw[..header_len];
-                    if !has_subset && h.end_doctype.get().is_some() {
+            Event::Doctype { has_internal_subset, .. } => {
+                self.in_doctype.set(Some(*has_internal_subset));
+                if h.default.get().is_some() && h.start_doctype.get().is_none() {
+                    let mut header = l.raw;
+                    if !has_internal_subset && h.end_doctype.get().is_some() {
                         header = header.strip_suffix('>').unwrap_or(header);
                     }
                     for token in dtd_tokens(header) {
                         self.to_default(token);
                     }
                 }
-                *self.dtd_text.borrow_mut() =
-                    Some(DtdText { raw: l.raw.to_string(), start: l.span.start.byte_offset, cursor: header_len });
             }
             Event::EndDoctype => {
-                let Some(dtd) = self.dtd_text.borrow_mut().take() else { return };
-                let mut tail = dtd.raw.get(dtd.cursor..).unwrap_or("");
-                // Declarations at the end of the internal subset that weren't
-                // processed (after an unread parameter entity reference) have
-                // no event of their own: token by token, up to the closing ']'.
-                if dtd.raw[..doctype_header_len(&dtd.raw)].ends_with('[') {
-                    if let Some(close) = tail.rfind(']') {
-                        let inner = &tail[..close];
-                        if !inner.trim_start_matches([' ', '\t', '\r', '\n']).is_empty() {
-                            self.gap_to_default(inner);
-                            tail = &tail[close..];
-                        }
-                    }
-                }
-                let rest = tail.trim_start_matches([' ', '\t', '\r', '\n']);
-                if rest.len() < tail.len() {
-                    self.to_default(&tail[..tail.len() - rest.len()]);
-                }
-                if h.end_doctype.get().is_none() {
-                    for token in dtd_tokens(rest) {
+                // Without an internal subset, its '>' went with the header.
+                if self.in_doctype.take() == Some(true) && h.default.get().is_some() && h.end_doctype.get().is_none() {
+                    for token in dtd_tokens(l.raw) {
                         self.to_default(token);
                     }
                 }
             }
+            // Declarations libexpat didn't process, and empty ATTLISTs.
+            Event::OtherDecl(_) if h.default.get().is_some() => self.gap_to_default(l.raw),
             Event::ElementDecl { .. }
             | Event::AttlistDecl { .. }
             | Event::EntityDecl { .. }
             | Event::NotationDecl { .. }
-            | Event::ProcessingInstruction { .. }
-            | Event::Comment(_)
             | Event::ParameterEntityRef(_) => {
-                let gap = {
-                    let Ok(mut text) = self.dtd_text.try_borrow_mut() else { return };
-                    let Some(dtd) = text.as_mut() else { return }; // not in a DOCTYPE
-                    let Some(at) = l.span.start.byte_offset.checked_sub(dtd.start) else { return };
-                    if at < dtd.cursor {
-                        return; // another attribute of an ATTLIST already dealt with
-                    }
-                    let gap = dtd.raw.get(dtd.cursor..at).unwrap_or("").to_string();
-                    dtd.cursor = at + l.raw.len();
-                    gap
-                };
-                // Whitespace, or declarations libexpat didn't process (after
-                // a parameter entity reference that wasn't read): token by
-                // token, as libexpat delivers them.
-                self.gap_to_default(&gap);
+                if h.default.get().is_none() || self.in_doctype.get().is_none() {
+                    return;
+                }
+                let span = (l.span.start.byte_offset, l.span.end.byte_offset);
+                if self.decl_span.replace(Some(span)) == Some(span) {
+                    return; // another attribute of an ATTLIST already dealt with
+                }
                 let unhandled = match &l.event {
                     Event::ElementDecl { .. } if h.element_decl.get().is_some() => {
                         // libexpat passes every '|' after a choice group's

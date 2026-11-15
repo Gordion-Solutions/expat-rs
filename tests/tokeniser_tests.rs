@@ -126,11 +126,18 @@ fn doctype_simple() {
 
 #[test]
 fn doctype_with_internal_subset() {
-    let ts = tokens("<!DOCTYPE root [ <!ELEMENT root (#PCDATA)> ]>");
-    if let Token::Doctype { name, body, .. } = &ts[0] {
+    let ts = tokens("<!DOCTYPE root SYSTEM 'r.dtd' [ <!ELEMENT root (#PCDATA)> ]>");
+    if let Token::Doctype { name, body, has_internal_subset, .. } = &ts[0] {
         assert_eq!(*name, "root");
-        assert!(body.contains("<!ELEMENT root"));
+        assert_eq!(*body, "SYSTEM 'r.dtd'");
+        assert!(*has_internal_subset);
     } else { panic!("not a Doctype"); }
+    // Then the internal subset, item by item, and its end.
+    assert_eq!(ts[1], Token::SubsetWhitespace(" "));
+    assert_eq!(ts[2], Token::SubsetDecl("<!ELEMENT root (#PCDATA)>"));
+    assert_eq!(ts[3], Token::SubsetWhitespace(" "));
+    assert_eq!(ts[4], Token::DoctypeEnd);
+    assert_eq!(ts.len(), 5);
 }
 
 // §4.1 [Productions 66–68]: References

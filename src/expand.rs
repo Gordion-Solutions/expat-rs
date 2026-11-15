@@ -352,6 +352,9 @@ impl<'e, 'l> Expander<'e, 'l> {
                     "XML or text declaration not allowed in the replacement text of entity {name:?}"))),
                 Token::Doctype { .. } => return Err(self.error(ErrorKind::InvalidToken, format!(
                     "DOCTYPE not allowed in the replacement text of entity {name:?}"))),
+                Token::SubsetDecl(_) | Token::SubsetWhitespace(_) | Token::DoctypeEnd => {
+                    unreachable!("a DOCTYPE in replacement text is an error at its start")
+                }
             }
         }
         if let Some(tag) = open.last() {

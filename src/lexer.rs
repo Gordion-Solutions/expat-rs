@@ -47,6 +47,9 @@ pub struct Lexer<'a> {
     cdata_pieces: bool,
     /// Inside a CDATA section reported in pieces.
     in_cdata: bool,
+    /// The text before `src` ended with `\r`, so a `\n` at its start
+    /// completes that line end (incremental parsing).
+    starts_after_cr: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -68,6 +71,7 @@ impl<'a> Lexer<'a> {
             text_decl: false,
             cdata_pieces: false,
             in_cdata: false,
+            starts_after_cr: false,
         }
     }
 
@@ -88,6 +92,7 @@ impl<'a> Lexer<'a> {
             text_decl: false,
             cdata_pieces: false,
             in_cdata: false,
+            starts_after_cr: false,
         }
     }
 
@@ -111,6 +116,18 @@ impl<'a> Lexer<'a> {
     /// Current position: where the next token starts.
     pub fn position(&self) -> Position {
         self.pos
+    }
+
+    /// Continue after text that ended with `\r` (incremental parsing).
+    pub(crate) fn after_cr_at_start(mut self, on: bool) -> Self {
+        self.starts_after_cr = on;
+        self
+    }
+
+    /// Continue inside a DOCTYPE's internal subset (incremental parsing).
+    pub(crate) fn in_subset(mut self, on: bool) -> Self {
+        self.in_subset = on;
+        self
     }
 
     /// Take the declarations recorded by the most recent DOCTYPE token.
@@ -198,10 +215,11 @@ impl<'a> Lexer<'a> {
     /// from the current position.
     fn position_at(&self, byte_offset: usize) -> Position {
         let before = &self.src[..byte_offset];
-        let (breaks, after_last) = line_breaks(false, before);
+        let (breaks, after_last) = line_breaks(self.starts_after_cr, before);
         // A byte order mark isn't part of the document: line 1 starts after it.
         let bom = if self.doc_start == usize::MAX { 0 } else { self.doc_start };
-        let line_start = if breaks == 0 { bom.min(byte_offset) } else { after_last };
+        // A `\n` completing a `\r\n` begun before `src` starts no column.
+        let line_start = if breaks == 0 { bom.min(byte_offset).max(after_last) } else { after_last };
         let column = 1 + String::from_utf8_lossy(&before[line_start..]).chars().count() as u32;
         Position { line: 1 + breaks, column, byte_offset }
     }
@@ -209,7 +227,10 @@ impl<'a> Lexer<'a> {
     /// Whether the byte before `offset` is `\r` (so a `\n` there continues
     /// a line break already counted).
     fn after_cr(&self, offset: usize) -> bool {
-        offset > 0 && self.src[offset - 1] == b'\r'
+        if offset == 0 {
+            return self.starts_after_cr;
+        }
+        self.src[offset - 1] == b'\r'
     }
 
     /// Advance past one byte, updating line/column. Columns count
@@ -468,11 +489,19 @@ impl<'a> Lexer<'a> {
             }
         }
         let start = self.pos;
+        let in_dtd = self.in_subset || self.src[start.byte_offset..].starts_with(b"<!DOCTYPE");
         let tok = self.scan_token().map_err(|e| match e {
             // Input ran out inside a construct: reported where the
-            // construct starts, as libexpat does.
+            // construct starts, as libexpat does; in the DOCTYPE, where
+            // libexpat's token there starts (see `dtd_token_boundary`).
             XmlError::UnexpectedEof { context, .. } if e.kind() == ErrorKind::UnclosedToken => {
-                XmlError::UnexpectedEof { pos: start, context }
+                let pos = if in_dtd {
+                    let rest = self.text.get(start.byte_offset..).unwrap_or("");
+                    start.advance(&rest[..dtd_token_boundary(rest)])
+                } else {
+                    start
+                };
+                XmlError::UnexpectedEof { pos, context }
             }
             e => e,
         })?;
@@ -490,6 +519,9 @@ impl<'a> Lexer<'a> {
         }
         if self.is_eof() {
             return Ok(None);
+        }
+        if self.in_subset {
+            return self.scan_subset_token().map(Some);
         }
         // After the prolog, characters between tags are Text. Inside the
         // prolog (before the root element), only whitespace is allowed.
@@ -833,4 +865,45 @@ fn is_valid_enc_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
         && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Where the last complete token of libexpat's DOCTYPE tokenisation ends in
+/// `s`, which starts at a declaration (or the DOCTYPE) and is cut off by
+/// the end of the input. Its tokens: a `<!` keyword, a name (or `#` and a
+/// name), a quoted literal, `%name;`, a run of whitespace, a comment or
+/// processing instruction, or a single character of punctuation; a token
+/// that may continue past the end of `s` isn't complete, nor is a literal
+/// until the character after it is seen.
+pub(crate) fn dtd_token_boundary(s: &str) -> usize {
+    let is_name = |c: char| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':') || !c.is_ascii();
+    let mut boundary = 0;
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let len = if rest.starts_with("<!--") {
+            rest.find("-->").map(|i| i + 3)
+        } else if rest.starts_with("<?") {
+            rest.find("?>").map(|i| i + 2)
+        } else if let Some(word) = rest.strip_prefix("<!") {
+            word.find(|c: char| !c.is_ascii_alphabetic()).filter(|&i| i > 0).map(|i| 2 + i)
+        } else if matches!(c, ' ' | '\t' | '\r' | '\n') {
+            Some(rest.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')).unwrap_or(rest.len()))
+        } else if c == '"' || c == '\'' {
+            // Complete once the character after it is seen.
+            rest[1..].find(c).map(|i| i + 2).filter(|&len| len < rest.len())
+        } else if c == '%' && rest[1..].starts_with(is_name) {
+            rest.find(';').map(|i| i + 1)
+        } else if c == '#' || is_name(c) {
+            let first = c.len_utf8();
+            rest[first..].find(|c: char| !is_name(c)).map(|i| i + first)
+        } else if c == ')' {
+            // May take a quantifier.
+            rest[1..].chars().next().map(|q| if matches!(q, '?' | '*' | '+') { 2 } else { 1 })
+        } else {
+            Some(c.len_utf8())
+        };
+        let Some(len) = len else { break };
+        boundary += len;
+        rest = &rest[len..];
+    }
+    boundary
 }

@@ -109,11 +109,16 @@ fn declarations_match_libexpat() {
     check_probe("declarations");
 }
 
-/// DTD declarations fed in small pieces: libexpat reports each as it
-/// completes, expat-capi when the internal subset closes (see
-/// tests/c/dtd_pieces.c and the README).
 #[test]
-#[ignore = "declarations in an internal subset fed in pieces are reported when it closes"]
 fn dtd_in_pieces_matches_libexpat() {
     check_probe("dtd_pieces");
+}
+
+/// The words of a declaration that go to the default handler: libexpat
+/// passes each as it arrives, expat-capi when the declaration is complete
+/// (see tests/c/dtd_words.c and the README).
+#[test]
+#[ignore = "a declaration's words reach the default handler when it is complete"]
+fn declaration_words_in_pieces_match_libexpat() {
+    check_probe("dtd_words");
 }

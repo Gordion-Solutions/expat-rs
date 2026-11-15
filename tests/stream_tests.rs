@@ -56,6 +56,8 @@ const DOCS: &[&str] = &[
     "<r xmlns='d' xmlns:p='pu'><p:e p:x='1'/><e/></r>",
     "<a><b><c/></b><d>text</d></a><!-- trailing --><?pi?>",
     "<r>long text without markup that runs across many chunks and has no line breaks at all</r>",
+    // Names and literals of characters of several bytes in the DOCTYPE.
+    "<!DOCTYPE dé [\r\n<!ELEMENT éa (éb|ü|c)>\r\n<!ENTITY éx \"ü\u{333}\">\r\n<!ATTLIST éa é\u{333} CDATA 'v\u{333}'>\r\n]>\r\n<dé>&éx;</dé>",
 ];
 
 #[test]
@@ -112,7 +114,12 @@ fn errors_are_reported_the_same() {
                 // Found by fuzzing: two errors in one text run outside the
                 // root; both modes must report the earlier one.
                 "<!DOCTYPE d []>\nstray text then a NUL \u{0} later",
-                "\n\n>\r\n!EL]]>dc>"] {
+                "\n\n>\r\n!EL]]>dc>",
+                // Found by fuzzing: a `\r\n` split between chunks before
+                // stray text after the root, and inside the DOCTYPE.
+                "<doc></doc>\r\nIllegal data\r\n",
+                "<!DOCTYPE d [\r\n<!ENTITY e \"abc",
+                "<doc></doc>\r\n\u{0}"] {
         let want = whole(doc, true).expect_err(doc);
         for cut in 0..=doc.len() {
             let got = streamed(doc.as_bytes(), &[cut], true).expect_err(doc);
@@ -293,3 +300,4 @@ fn unclosed_cdata_in_pieces_is_still_an_error() {
         }
     }
 }
+

@@ -20,14 +20,14 @@ pub enum Token<'a> {
     /// XML declaration: `<?xml version="1.0" ...?>`. Per §2.8 [Production 23].
     XmlDecl(XmlDecl<'a>),
 
-    /// `<!DOCTYPE name ...>`. Per §2.8 [Production 28]. The internal
-    /// subset is tokenised and checked by the lexer; `body` is the raw text
-    /// after the name.
+    /// `<!DOCTYPE name ...` up to its `[` (or, without an internal subset,
+    /// its `>`). Per §2.8 [Production 28]. An internal subset follows as
+    /// [`Token::SubsetDecl`] and [`Token::SubsetWhitespace`] tokens and
+    /// ends with [`Token::DoctypeEnd`].
     Doctype {
         /// The root element name the DOCTYPE declares.
         name: &'a str,
-        /// The rest of the declaration as written (external ID and
-        /// internal subset), trimmed.
+        /// The external ID as written, trimmed (empty if there is none).
         body: &'a str,
         /// System identifier of the external subset, if any.
         system_id: Option<&'a str>,
@@ -36,6 +36,17 @@ pub enum Token<'a> {
         /// Whether there is an internal subset (`[...]`).
         has_internal_subset: bool,
     },
+
+    /// One item of the internal subset (§2.8 [Production 28b]): a markup
+    /// declaration, processing instruction, comment or parameter-entity
+    /// reference, as written. What it declares is recorded for the parser.
+    SubsetDecl(&'a str),
+
+    /// Whitespace between items of the internal subset (§2.8, DeclSep).
+    SubsetWhitespace(&'a str),
+
+    /// `]` S? `>`: the end of the internal subset, and of the DOCTYPE.
+    DoctypeEnd,
 
     /// Element start tag: `<name attr="value" ...>`. Per §3.1 [Production 40].
     StartTag {
