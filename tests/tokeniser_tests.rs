@@ -8,11 +8,8 @@ use expat_rs::{Lexer, Token, XmlDecl};
 fn tokens(src: &str) -> Vec<Token<'_>> {
     let mut lex = Lexer::new(src);
     let mut out = Vec::new();
-    loop {
-        match lex.next_token().expect("tokenise") {
-            Some(t) => out.push(t),
-            None    => break,
-        }
+    while let Some(t) = lex.next_token().expect("tokenise") {
+        out.push(t);
     }
     out
 }

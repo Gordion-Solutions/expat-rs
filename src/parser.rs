@@ -24,10 +24,11 @@ use crate::chars::{is_name_char, Edition};
 use crate::external::EntityContext;
 use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
-use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
+use crate::event::{normalize_newlines, Attribute, EntityRaw, Event, Located, Span};
 
 /// Events produced while handling a token, each with its span.
-pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span)>;
+/// Events produced, with where they came from (see [`Located`]).
+pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span, EntityRaw)>;
 use crate::expand::{ExpandSettings, Expander, ExternalLoader};
 use crate::lexer::Lexer;
 use crate::namespaces::Namespaces;
@@ -294,9 +295,15 @@ impl<'l> State<'l> {
 
     /// Deliver an event, through namespace processing if it is enabled.
     fn emit<'t>(&mut self, event: Event<'t>, out: &mut Out<'t>) -> Result<()> {
+        self.emit_from(event, None, out)
+    }
+
+    /// Deliver an event from an entity's replacement text (`entity_raw`, see
+    /// [`Located::entity_raw`]), or from the document if `None`.
+    fn emit_from<'t>(&mut self, event: Event<'t>, entity_raw: EntityRaw, out: &mut Out<'t>) -> Result<()> {
         match &mut self.namespaces {
-            Some(ns) => ns.process(event, self.span, self.last_pos, out)?,
-            None => out.push_back((event, self.span)),
+            Some(ns) => ns.process(event, self.span, entity_raw, self.last_pos, out)?,
+            None => out.push_back((event, self.span, entity_raw)),
         }
         Ok(())
     }
@@ -648,10 +655,10 @@ impl<'l> State<'l> {
                     return self.emit(Event::Text(Cow::Borrowed(text)), out);
                 }
                 let mut x = self.expander();
-                x.check_content_entity(name)?;
+                x.check_content_entity(name, None)?;
                 let (used, events) = (x.expanded, std::mem::take(&mut x.events));
                 self.charge(used)?;
-                events.into_iter().try_for_each(|e| self.emit(e, out))
+                events.into_iter().try_for_each(|(e, raw)| self.emit_from(e, raw, out))
             }
             Token::CharRef(c) => {
                 if !self.in_content() {
@@ -758,10 +765,10 @@ impl<'a> Parser<'a> {
     /// and the source text it came from.
     pub fn next_located(&mut self) -> Result<Option<Located<'a>>> {
         loop {
-            if let Some((event, span)) = self.out.pop_front() {
+            if let Some((event, span, entity_raw)) = self.out.pop_front() {
                 let raw = self.src.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                 // The input is the text itself.
-                return Ok(Some(Located { event, span, raw, input_start: span.start.byte_offset }));
+                return Ok(Some(Located { event, span, raw, input_start: span.start.byte_offset, entity_raw }));
             }
             if self.done {
                 return Ok(None);

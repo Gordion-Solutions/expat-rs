@@ -14,6 +14,9 @@ waited for the end of the DOCTYPE), as libexpat does.
   an internal subset, the `>`). `Token::Doctype` likewise, followed by the
   new `Token::SubsetDecl`, `Token::SubsetWhitespace` and
   `Token::DoctypeEnd`.
+- `Located` has a new field, `entity_raw`: for an event from an entity's
+  replacement text, the text in it the event came from (`raw` and `span`
+  are the reference's).
 
 ### Added
 - `Event::OtherDecl`: with `with_outside_whitespace`, a declaration no

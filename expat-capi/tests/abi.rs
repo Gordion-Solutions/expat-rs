@@ -122,3 +122,13 @@ fn dtd_in_pieces_matches_libexpat() {
 fn declaration_words_in_pieces_match_libexpat() {
     check_probe("dtd_words");
 }
+
+#[test]
+fn entity_markup_to_default_matches_libexpat() {
+    check_probe("entities");
+}
+
+#[test]
+fn namespace_separator_in_uri_matches_libexpat() {
+    check_probe("ns_separator");
+}

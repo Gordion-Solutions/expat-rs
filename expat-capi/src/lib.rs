@@ -271,8 +271,8 @@ pub struct Shim {
     attlist: RefCell<Option<AttlistPlaces>>,
     /// `XML_UseParserAsHandlerArg`: handlers get the parser, not user data.
     parser_as_arg: Cell<bool>,
-    /// Source text of the event being delivered, for `XML_DefaultCurrent`
-    /// (kept only while a default handler is set).
+    /// Text of the event, or piece of character data, being delivered, for
+    /// `XML_DefaultCurrent` (kept only while a default handler is set).
     current_raw: RefCell<String>,
     /// Attribute declared ID for each element (`XML_GetIdAttributeIndex`).
     id_attributes: RefCell<std::collections::HashMap<String, String>>,
@@ -531,7 +531,7 @@ impl Shim {
             } else if self.stop_in_cdata_start.get() && matches!(l.event, Event::CData(_) | Event::EndCData) {
                 self.stop_in_cdata_start.set(false);
                 match &l.event {
-                    Event::CData(text) => self.cdata_first_token(text, l.raw, l.span.start, l.input_start),
+                    Event::CData(text) => self.cdata_first_token(text, l.raw, l.entity_raw.as_deref(), l.span.start, l.input_start),
                     _ => self.dispatch(l),
                 }
             }
@@ -811,6 +811,11 @@ fn is_entity_reference(raw: &str) -> bool {
 
 /// Whether `text` is `raw` with its line ends normalised: character data
 /// from the source, not from an entity's replacement text.
+/// A character RFC 3986 allows in a URI: unreserved, reserved, or `%`.
+fn is_uri_char(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&c)
+}
+
 fn is_source(text: &str, raw: &str) -> bool {
     if raw.contains('\r') {
         raw.replace("\r\n", "\n").replace('\r', "\n") == text
@@ -1065,6 +1070,16 @@ impl Shim {
         }
     }
 
+    /// What XML_DefaultCurrent passes to the default handler from now on.
+    fn set_current_raw(&self, raw: &str) {
+        if self.handlers.default.get().is_some() {
+            if let Ok(mut current) = self.current_raw.try_borrow_mut() {
+                current.clear();
+                current.push_str(raw);
+            }
+        }
+    }
+
     /// Deliver `raw` to the default handler, if one is set; returns whether
     /// it was.
     fn to_default(&self, raw: &str) -> bool {
@@ -1095,7 +1110,7 @@ impl Shim {
             }
             self.unexpanded.set(Some(span));
             let name = &l.raw[1..l.raw.len() - 1];
-            Located { event: Event::SkippedEntity(name.into()), span: l.span, raw: l.raw, input_start: l.input_start }
+            Located { event: Event::SkippedEntity(name.into()), span: l.span, raw: l.raw, input_start: l.input_start, entity_raw: None }
         } else {
             self.unexpanded.set(None);
             l
@@ -1130,12 +1145,12 @@ impl Shim {
         if matches!(l.event, Event::StartElement { .. }) {
             self.before_root.set(false);
         }
-        if self.handlers.default.get().is_some() {
-            if let Ok(mut raw) = self.current_raw.try_borrow_mut() {
-                raw.clear();
-                raw.push_str(l.raw);
-            }
-        }
+        // What the default handler gets for this event: its text, from the
+        // replacement text of the entity it came from if it did, as libexpat
+        // reports markup there.
+        let from = l.entity_raw.as_deref();
+        let default_raw = from.unwrap_or(l.raw);
+        self.set_current_raw(default_raw);
         match &l.event {
             Event::XmlDecl(d) => {
                 self.standalone.set(d.standalone == Some(true));
@@ -1244,7 +1259,7 @@ impl Shim {
                         }
                     }
                     None => {
-                        self.to_default(l.raw);
+                        self.to_default(default_raw);
                     }
                 }
             }
@@ -1252,25 +1267,30 @@ impl Shim {
                 // libexpat reports the end with the start tag's expanded
                 // name; expat-rs's EndElement carries the QName.
                 let n = self.open.try_borrow_mut().ok().and_then(|mut o| o.pop()).unwrap_or_else(|| cstr(&name));
-                let empty_tag = l.raw.starts_with('<') && l.raw.ends_with("/>");
+                let is_empty_tag = |raw: &str| raw.starts_with('<') && raw.ends_with("/>");
+                let empty_tag = is_empty_tag(l.raw);
                 if empty_tag && h.start_element.get().is_some() {
                     // An empty element's end comes at the end of its tag
                     // once the start has gone to a start handler.
                     self.pos.set(l.span.end);
                     self.input_pos.set(self.input_end.get());
                 }
+                if is_empty_tag(default_raw) {
+                    // Its tag went with the start: nothing current.
+                    self.set_current_raw("");
+                }
                 match h.end_element.get() {
                     // SAFETY: registered EndElementHandler; valid C string.
                     Some(f) => unsafe { f(ud, n.as_ptr()) },
                     // An empty element's tag already went to the default
                     // handler with its start.
-                    None if !empty_tag => {
-                        self.to_default(l.raw);
+                    None if !is_empty_tag(default_raw) => {
+                        self.to_default(default_raw);
                     }
                     None => {}
                 }
             }
-            Event::Text(text) => self.character_data(&text, l.raw, l.span.start, l.input_start),
+            Event::Text(text) => self.character_data(&text, l.raw, from, l.span.start, l.input_start),
             // CDATA sections come in pieces (`with_cdata_pieces`), their
             // text as far as the input goes, as libexpat delivers it.
             Event::StartCData => {
@@ -1278,20 +1298,20 @@ impl Shim {
                     // SAFETY: registered StartCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default(l.raw);
+                        self.to_default(default_raw);
                     }
                 }
                 if self.stop_requested.get() {
                     self.stop_in_cdata_start.set(true);
                 }
             }
-            Event::CData(text) => self.cdata_text(&text, l.raw, l.span.start, l.input_start),
+            Event::CData(text) => self.cdata_text(&text, l.raw, from, l.span.start, l.input_start),
             Event::EndCData => {
                 match h.end_cdata.get() {
                     // SAFETY: registered EndCdataSectionHandler.
                     Some(f) => unsafe { f(ud) },
                     None => {
-                        self.to_default(l.raw);
+                        self.to_default(default_raw);
                     }
                 }
                 if self.stop_requested.get() {
@@ -1305,7 +1325,7 @@ impl Shim {
                     unsafe { f(ud, t.as_ptr()) };
                 }
                 None => {
-                    self.to_default(l.raw);
+                    self.to_default(default_raw);
                 }
             },
             Event::ProcessingInstruction { target, body } => match h.processing_instruction.get() {
@@ -1316,7 +1336,7 @@ impl Shim {
                     unsafe { f(ud, t.as_ptr(), b.as_ptr()) };
                 }
                 None => {
-                    self.to_default(l.raw);
+                    self.to_default(default_raw);
                 }
             },
             Event::NotationDecl { name, public_id, system_id } => {
@@ -1383,6 +1403,20 @@ impl Shim {
                 }
             }
             Event::StartNamespace { prefix, uri } => {
+                // A URI containing the namespace separator would make the
+                // names reported ambiguous (CVE-2022-25236): libexpat
+                // (2.4.5 and later) rejects it as a syntax error at the
+                // start tag, unless the separator is a character URIs may
+                // contain anyway (RFC 3986).
+                if let (Some(sep), Some(uri)) = (self.ns_sep, uri.as_deref()) {
+                    if sep != 0 && !is_uri_char(sep) && uri.as_bytes().contains(&sep) {
+                        self.token_end.set(self.pos.get());
+                        self.input_end.set(self.input_pos.get());
+                        self.stop_error.set(XML_ERROR_SYNTAX);
+                        self.stop_requested.set(true);
+                        return;
+                    }
+                }
                 if let Some(f) = h.start_namespace.get() {
                     let (p, u) = (opt_cstr(prefix.as_deref()), opt_cstr(uri.as_deref()));
                     // SAFETY: registered StartNamespaceDeclHandler; valid C
@@ -1416,8 +1450,8 @@ impl Shim {
                 // default handler (ElementTree relies on this).
                 let Some(f) = h.external_entity_ref.get() else {
                     // The reference itself, also when it was reached through
-                    // internal entities (`l.raw` is then the outermost one).
-                    self.to_default(&format!("&{name};"));
+                    // internal entities.
+                    self.to_default(default_raw);
                     return;
                 };
                 {
@@ -1450,7 +1484,7 @@ impl Shim {
                     unsafe { f(ud, n.as_ptr(), 0) };
                 }
                 None => {
-                    self.to_default(l.raw);
+                    self.to_default(default_raw);
                 }
             },
             _ => {}
@@ -1707,7 +1741,7 @@ impl Shim {
     /// After a stop in a CDATA section's start handler, the first token of
     /// its text, which libexpat still delivers: up to the first `]` after
     /// the first character or the first line end, or a line end alone.
-    fn cdata_first_token(&self, text: &str, raw: &str, start: Position, start_input: usize) {
+    fn cdata_first_token(&self, text: &str, raw: &str, from: Option<&str>, start: Position, start_input: usize) {
         fn first(s: &str) -> &str {
             let s = cdata_parts(s)[0];
             match s.find(['\r', '\n']) {
@@ -1718,27 +1752,28 @@ impl Shim {
         }
         let t = first(text);
         let t = if t.starts_with('\r') { "\n" } else { t };
-        if is_source(text, raw) {
+        if from.is_none() && is_source(text, raw) {
             self.char_piece(t, first(raw), (start, start_input));
         } else {
             // From an entity's replacement text: at the reference.
             self.pos.set(start);
             self.input_pos.set(start_input);
-            self.deliver_chars(t, raw);
+            self.deliver_chars(t, if from == Some(text) { t } else { from.unwrap_or(raw) });
         }
     }
 
     /// Text of a CDATA section: libexpat's tokens there also end before
     /// each `]` (which may start the closing `]]>`), so its handler gets
     /// the text in parts, each after the first starting with a `]`.
-    fn cdata_text(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        if !is_source(text, raw) {
+    fn cdata_text(&self, text: &str, raw: &str, from: Option<&str>, start: Position, start_input: usize) {
+        if from.is_some() || !is_source(text, raw) {
             // From an entity's replacement text: every part at the reference.
             for t in cdata_parts(text) {
                 if self.stop_requested.get() {
                     return;
                 }
-                self.character_data(t, raw, start, start_input);
+                let part_from = if from == Some(text) { Some(t) } else { from };
+                self.character_data(t, raw, part_from, start, start_input);
             }
             return;
         }
@@ -1748,13 +1783,16 @@ impl Shim {
             if self.stop_requested.get() {
                 return;
             }
-            self.character_data(t, r, at.0, at.1);
+            self.character_data(t, r, None, at.0, at.1);
             at = (at.0.advance(r), at.1 + self.input_len(r));
         }
     }
 
-    fn character_data(&self, text: &str, raw: &str, start: Position, start_input: usize) {
-        if is_source(text, raw) {
+    /// `from`: the text in an entity's replacement text the character data
+    /// came from (see `Located::entity_raw`), which the default handler
+    /// gets instead of `raw`.
+    fn character_data(&self, text: &str, raw: &str, from: Option<&str>, start: Position, start_input: usize) {
+        if from.is_none() && is_source(text, raw) {
             let bytes = raw.as_bytes();
             let (mut at, mut piece_start, mut i) = ((start, start_input), 0, 0);
             while i < bytes.len() {
@@ -1782,6 +1820,11 @@ impl Shim {
                 self.char_piece(piece, piece, at);
             }
         } else {
+            // From a reference: every piece at the reference. Replacement
+            // text that is the character data itself goes to the default
+            // handler piece by piece, as libexpat passes it.
+            let raw = from.unwrap_or(raw);
+            let same = raw == text;
             for line in text.split_inclusive('\n') {
                 let (body, eol) = match line.strip_suffix('\n') {
                     Some(body) => (body, "\n"),
@@ -1791,7 +1834,7 @@ impl Shim {
                     if !part.is_empty() && !self.stop_requested.get() {
                         self.pos.set(start);
                         self.input_pos.set(start_input);
-                        self.deliver_chars(part, raw);
+                        self.deliver_chars(part, if same { part } else { raw });
                     }
                 }
             }
@@ -1848,6 +1891,9 @@ impl Shim {
     fn deliver_piece(&self, text: &str, raw: &str) {
         match self.handlers.character_data.get() {
             Some(f) => {
+                // libexpat's tokens are these pieces: XML_DefaultCurrent
+                // passes the one being delivered.
+                self.set_current_raw(raw);
                 // SAFETY: registered CharacterDataHandler; `text` is valid
                 // for its length during the call.
                 unsafe { f(self.ud(), text.as_ptr().cast(), text.len() as c_int) };
@@ -2153,11 +2199,10 @@ pub unsafe extern "C" fn XML_DefaultCurrent(parser: XML_Parser) {
     if p.status.get() != Status::Parsing {
         return;
     }
-    // A copy, so the default handler may itself call back in.
+    // A copy, so the default handler may itself call back in. Empty (the
+    // end of an empty element) is passed as libexpat does, with length 0.
     let raw = p.current_raw.try_borrow().map(|r| r.clone()).unwrap_or_default();
-    if !raw.is_empty() {
-        p.to_default(&raw);
-    }
+    p.to_default(&raw);
 }
 
 #[no_mangle]

@@ -20,7 +20,9 @@ use std::ptr;
 use expat::*;
 use pyo3::exceptions::{PyAttributeError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyCapsule, PyDict, PyList, PyString, PyTuple};
+
+mod capi;
 
 pyo3::create_exception!(pyexpat, ExpatError, pyo3::exceptions::PyException);
 
@@ -395,6 +397,8 @@ macro_rules! simple_callback {
         unsafe extern "C" fn $fn_name(ud: *mut c_void, $($arg: *const c_char),*) {
             with_parser(ud, |py, this| {
                 let Some(h) = this.ready(py, $h) else { return };
+                // A closure for `?`, which some conversions don't use.
+                #[allow(clippy::redundant_closure_call)]
                 let args = (|| -> PyResult<_> { Ok(($(simple_callback!(@conv this, py, $conv, $arg),)*)) })();
                 match args {
                     Ok(args) => { this.call(py, &h, args); }
@@ -696,20 +700,29 @@ fn byte_map(py: Python<'_>, name: &str) -> PyResult<[c_int; 256]> {
     Ok(map)
 }
 
+/// Fill in `info` for the encoding `name`, as `pyexpat` does: a
+/// single-byte encoding Python has a codec for.
+///
+/// # Safety
+/// `name` is NULL or a NUL-terminated string and `info` the parser's
+/// XML_Encoding to fill in, as passed to an unknown encoding handler.
+pub(crate) unsafe fn fill_encoding(py: Python<'_>, name: *const c_char, info: *mut XML_Encoding) -> PyResult<()> {
+    let map = byte_map(py, &text(name).unwrap_or_default())?;
+    // SAFETY: as the caller guarantees.
+    unsafe {
+        (*info).map = map;
+        (*info).data = ptr::null_mut();
+        (*info).convert = None;
+        (*info).release = None;
+    }
+    Ok(())
+}
+
 unsafe extern "C" fn cb_unknown_encoding(ud: *mut c_void, name: *const c_char, info: *mut XML_Encoding) -> c_int {
     with_parser(ud, |py, this| {
-        let name = text(name).unwrap_or_default();
-        match byte_map(py, &name) {
-            Ok(map) => {
-                // SAFETY: `info` is the parser's XML_Encoding to fill in.
-                unsafe {
-                    (*info).map = map;
-                    (*info).data = ptr::null_mut();
-                    (*info).convert = None;
-                    (*info).release = None;
-                }
-                1
-            }
+        // SAFETY: the parser passes the encoding's name and its XML_Encoding.
+        match unsafe { fill_encoding(py, name, info) } {
+            Ok(()) => 1,
             Err(e) => {
                 this.fail(e);
                 0
@@ -1188,6 +1201,15 @@ fn parser_create(
 }
 
 /// ErrorString(code): the message for an error code, or None.
+/// `_expat_capi(real)`: the `expat_CAPI` capsule for this module, with the
+/// magic and version numbers of `real`, the interpreter's own `pyexpat`'s
+/// capsule (or None). Used by `expat_rs.install()`.
+#[pyfunction]
+#[pyo3(name = "_expat_capi")]
+fn expat_capi<'py>(py: Python<'py>, real: Option<Bound<'py, PyCapsule>>) -> PyResult<Bound<'py, PyCapsule>> {
+    capi::make_capsule(py, real.as_ref())
+}
+
 #[pyfunction]
 #[pyo3(name = "ErrorString")]
 fn error_string(code: c_int) -> Option<String> {
@@ -1201,6 +1223,7 @@ fn _pyexpat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("XMLParserType", py.get_type::<XmlParser>())?;
     m.add_function(wrap_pyfunction!(parser_create, m)?)?;
     m.add_function(wrap_pyfunction!(error_string, m)?)?;
+    m.add_function(wrap_pyfunction!(expat_capi, m)?)?;
     m.add("ExpatError", py.get_type::<ExpatError>())?;
     m.add("error", py.get_type::<ExpatError>())?;
     m.add("EXPAT_VERSION", text(XML_ExpatVersion()).unwrap_or_default())?;

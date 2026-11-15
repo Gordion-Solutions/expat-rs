@@ -11,6 +11,7 @@
 //! normalised (§3.3.3), or content brought in by an entity.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use crate::error::Position;
 use crate::external::EntityContext;
@@ -315,7 +316,15 @@ pub struct Located<'a> {
     /// input, different for input in other encodings (libexpat's
     /// `XML_GetCurrentByteIndex` counts these bytes).
     pub input_start: usize,
+    /// For an event from an internal entity's replacement text (or a loaded
+    /// external entity's): the text in it the event came from, as `raw` is
+    /// for the document; `span` and `raw` are then the reference's. `None`
+    /// for events from the document itself.
+    pub entity_raw: Option<Arc<str>>,
 }
+
+/// [`Located::entity_raw`].
+pub(crate) type EntityRaw = Option<Arc<str>>;
 
 /// An attribute on a start tag.
 #[derive(Clone, Debug, PartialEq, Eq)]

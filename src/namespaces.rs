@@ -19,11 +19,12 @@
 //! events rather than as attributes, as libexpat does.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use crate::chars::{is_name_char, is_name_start_char, Edition};
 use crate::error::{ErrorKind, Position, Result, XmlError};
-use crate::event::{Attribute, Event, Span};
+use crate::event::{Attribute, EntityRaw, Event, Span};
+use crate::parser::Out;
 
 pub(crate) const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 pub(crate) const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
@@ -106,19 +107,20 @@ impl Namespaces {
         &mut self,
         event: Event<'a>,
         span: Span,
+        entity_raw: EntityRaw,
         pos: Position,
-        out: &mut VecDeque<(Event<'a>, Span)>,
+        out: &mut Out<'a>,
     ) -> Result<()> {
         match event {
-            Event::StartElement { name, attributes, .. } => self.start(name, attributes, span, pos, out),
+            Event::StartElement { name, attributes, .. } => self.start(name, attributes, span, entity_raw, pos, out),
             Event::EndElement(name) => {
                 let scope = self.scopes.pop().unwrap_or_default();
-                out.push_back((Event::EndElement(name), span));
+                out.push_back((Event::EndElement(name), span, entity_raw.clone()));
                 for (prefix, _) in scope.into_iter().rev() {
                     if let Some(stack) = self.bindings.get_mut(prefix.as_deref().unwrap_or("")) {
                         stack.pop();
                     }
-                    out.push_back((Event::EndNamespace { prefix: prefix.map(Cow::Owned) }, span));
+                    out.push_back((Event::EndNamespace { prefix: prefix.map(Cow::Owned) }, span, entity_raw.clone()));
                 }
                 Ok(())
             }
@@ -133,14 +135,14 @@ impl Namespaces {
             // A parser for the entity's content resolves prefixes as here.
             Event::ExternalEntityRef { name, system_id, public_id, mut context } => {
                 context.namespaces = Some(self.in_scope());
-                out.push_back((Event::ExternalEntityRef { name, system_id, public_id, context }, span));
+                out.push_back((Event::ExternalEntityRef { name, system_id, public_id, context }, span, entity_raw));
                 Ok(())
             }
             Event::SkippedEntity(ref name) if name.contains(':') => {
                 Err(error(pos, ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon")))
             }
             other => {
-                out.push_back((other, span));
+                out.push_back((other, span, entity_raw));
                 Ok(())
             }
         }
@@ -151,8 +153,9 @@ impl Namespaces {
         name: Cow<'a, str>,
         attributes: Vec<Attribute<'a>>,
         span: Span,
+        entity_raw: EntityRaw,
         pos: Position,
-        out: &mut VecDeque<(Event<'a>, Span)>,
+        out: &mut Out<'a>,
     ) -> Result<()> {
         // Declarations first: they apply to the element's own name and
         // attributes (including declarations defaulted from the DTD).
@@ -188,7 +191,7 @@ impl Namespaces {
             out.push_back((Event::StartNamespace {
                 prefix: prefix.clone().map(Cow::Owned),
                 uri: uri.clone().map(Cow::Owned),
-            }, span));
+            }, span, entity_raw.clone()));
             self.bindings.entry(prefix.clone().unwrap_or_default()).or_default().push(uri.clone());
             scope.push((prefix, uri));
         }
@@ -225,7 +228,7 @@ impl Namespaces {
                 }
             }
         }
-        out.push_back((Event::StartElement { name, namespace, attributes }, span));
+        out.push_back((Event::StartElement { name, namespace, attributes }, span, entity_raw));
         Ok(())
     }
 }

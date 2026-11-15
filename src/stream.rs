@@ -553,11 +553,11 @@ impl<'l> StreamParser<'l> {
                     self.state.cr_before_token = self.cr_before(start.byte_offset);
                     self.state.direct_bytes = end.rebase(base).byte_offset as u64;
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
-                    for (event, span) in out.drain(..) {
+                    for (event, span, entity_raw) in out.drain(..) {
                         let input_start = self.input_at(span.start.byte_offset);
                         let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                         let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
-                        handler(Located { event, span, raw, input_start });
+                        handler(Located { event, span, raw, input_start, entity_raw });
                     }
                     consumed = Some(end);
                     if let Some((cr_start, cr_end)) = lone_cr {
@@ -566,11 +566,11 @@ impl<'l> StreamParser<'l> {
                         self.state.direct_bytes = cr_end.rebase(base).byte_offset as u64;
                         let cr: &str = &self.buf[cr_start.byte_offset..cr_end.byte_offset];
                         self.state.handle(Token::Text(cr), Dtd::default(), &mut out).map_err(|e| e.rebase(base))?;
-                        for (event, span) in out.drain(..) {
+                        for (event, span, entity_raw) in out.drain(..) {
                             let input_start = self.input_at(span.start.byte_offset);
                             let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                             let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
-                            handler(Located { event, span, raw, input_start });
+                            handler(Located { event, span, raw, input_start, entity_raw });
                         }
                         consumed = Some(cr_end);
                         continue;

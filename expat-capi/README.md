@@ -63,7 +63,11 @@ what libexpat 2.8.2 prints (`tests/c/*.expected`, recorded by
 `tools/regen_expected.sh`): callbacks and their arguments, line, column and
 byte positions, error codes, messages and positions, stopping, buffers,
 encodings, content models, settings, and DTD declarations with every
-handler and the default handler set at once (`tests/c/declarations.c`).
+handler and the default handler set at once (`tests/c/declarations.c`),
+markup in entities' replacement text reaching the default handler and
+`XML_DefaultCurrent` (`tests/c/entities.c`), and namespace URIs that
+contain the namespace separator, which libexpat rejects since
+CVE-2022-25236 (`tests/c/ns_separator.c`).
 `tests/c/android_consumers.c` calls the
 API the way Android's users of libexpat do (libcore's ExpatParser, Skia,
 aapt2 and aapt, frameworks/av, audio_route, the wayland scanner), following
