@@ -12,6 +12,13 @@
 //! read and set attributes while a parse is under way): its state is in
 //! `Cell`s and `RefCell`s, and no `RefCell` borrow is held across a call
 //! into Python.
+//!
+//! As with `pyexpat`, a parser may be used from any thread. Every access
+//! holds the GIL (the module is built for the stable ABI, which only GIL
+//! builds of CPython load, and never releases it), and the GIL only passes
+//! to another thread during a call into Python. A call from another thread
+//! then reaches the parser just as a handler's own call would, a case the
+//! module must handle anyway.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
@@ -94,7 +101,7 @@ const READ_SIZE: usize = 2048;
 /// `buffer_size`'s default.
 const DEFAULT_BUFFER_SIZE: usize = 8192;
 
-#[pyclass(name = "xmlparser", module = "pyexpat", unsendable, weakref)]
+#[pyclass(name = "xmlparser", module = "pyexpat", weakref)]
 pub struct XmlParser {
     itself: Cell<XML_Parser>,
     handlers: RefCell<Vec<Option<Py<PyAny>>>>,
@@ -118,6 +125,13 @@ pub struct XmlParser {
     parent: Option<Py<XmlParser>>,
 }
 
+// SAFETY: every access holds the GIL, which leaves one thread running at a
+// time and changes threads only during calls into Python, between which no
+// `RefCell` borrow is held (see the module documentation). The C parser
+// has no tie to the thread that made it.
+unsafe impl Send for XmlParser {}
+unsafe impl Sync for XmlParser {}
+
 impl Drop for XmlParser {
     fn drop(&mut self) {
         let p = self.itself.replace(ptr::null_mut());
@@ -126,6 +140,33 @@ impl Drop for XmlParser {
             // XML_ExternalEntityParserCreate and is freed once, here.
             unsafe { XML_ParserFree(p) };
         }
+    }
+}
+
+/// An argument that `pyexpat` declares `bool` to Argument Clinic: any
+/// object, taken by its truth value.
+struct Truth(bool);
+
+impl FromPyObject<'_, '_> for Truth {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        obj.is_truthy().map(Truth)
+    }
+}
+
+/// `Parse`'s `isfinal`: any object from Python 3.12, as for [`Truth`];
+/// before, `bool(accept={int})`, an integer.
+struct IsFinal(bool);
+
+impl FromPyObject<'_, '_> for IsFinal {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
+        if obj.py().version_info() >= (3, 12) {
+            return obj.is_truthy().map(IsFinal);
+        }
+        obj.extract::<c_int>().map(|i| IsFinal(i != 0))
     }
 }
 
@@ -186,16 +227,17 @@ impl XmlParser {
 
     /// The Python handler to call for `h`, after delivering any buffered
     /// character data; None when there is none or a handler has failed.
+    /// The CharacterDataHandler may change or clear the handler, so it is
+    /// looked up again after the flush, as CPython does.
     fn ready(&self, py: Python<'_>, h: H) -> Option<Handler> {
-        if self.failed() {
+        if self.failed() || self.handler(py, h).is_none() {
             return None;
         }
-        let handler = self.handler(py, h)?;
         self.flush(py).ok()?;
         if self.failed() {
             return None;
         }
-        Some(handler)
+        self.handler(py, h)
     }
 
     /// Calls a handler, recording any exception it raises.
@@ -213,6 +255,15 @@ impl XmlParser {
                 None
             }
         }
+    }
+
+    /// The RuntimeError for `Parse` or `ParseFile` called from one of this
+    /// parser's handlers, as CPython raises it since gh-146169.
+    fn check_not_in_handler(&self, method: &str) -> PyResult<()> {
+        if self.in_callback.get() {
+            return Err(PyRuntimeError::new_err(format!("cannot call {method}() from within a handler")));
+        }
+        Ok(())
     }
 
     /// Delivers buffered character data to the CharacterDataHandler.
@@ -426,23 +477,28 @@ unsafe extern "C" fn cb_character_data(ud: *mut c_void, s: *const c_char, len: c
             return;
         }
         let data = text_len(s, len);
-        let buffered = this.buffer.borrow().is_some();
-        if !buffered {
-            let Some(h) = this.handler(py, H::CharacterData) else { return };
-            this.call(py, &h, (data,));
-            return;
+        // Whether `data` fits in the buffer, if buffering is on.
+        let fits = |this: &XmlParser| {
+            let size = this.buffer_size.get();
+            this.buffer.borrow().as_ref().map(|b| b.len() + data.len() <= size)
+        };
+        if fits(this) == Some(false) {
+            if this.flush(py).is_err() {
+                return;
+            }
+            // The handler may have been cleared, or buffering turned off
+            // or resized: checked again below, as CPython does.
+            if this.handler(py, H::CharacterData).is_none() {
+                return;
+            }
         }
-        let size = this.buffer_size.get();
-        let used = this.buffer.borrow().as_ref().map_or(0, |b| b.len());
-        if used + data.len() > size && this.flush(py).is_err() {
-            return;
-        }
-        if data.len() > size {
-            // Too big to buffer: delivered on its own.
-            let Some(h) = this.handler(py, H::CharacterData) else { return };
+        if fits(this) == Some(true) {
+            if let Some(b) = this.buffer.borrow_mut().as_mut() {
+                b.push_str(&data);
+            }
+        } else if let Some(h) = this.handler(py, H::CharacterData) {
+            // Not buffering, or too big to buffer: delivered on its own.
             this.call(py, &h, (data,));
-        } else if let Some(b) = this.buffer.borrow_mut().as_mut() {
-            b.push_str(&data);
         }
     })
 }
@@ -820,14 +876,12 @@ fn data_bytes(parser: &XmlParser, data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> 
 #[pymethods]
 impl XmlParser {
     /// Parse(data, isfinal=False): parse the contents of a string or bytes.
-    #[pyo3(name = "Parse", signature = (data, isfinal = false))]
-    fn parse(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>, isfinal: bool) -> PyResult<i32> {
+    #[pyo3(name = "Parse", signature = (data, isfinal = IsFinal(false)))]
+    fn parse(slf: &Bound<'_, Self>, data: &Bound<'_, PyAny>, isfinal: IsFinal) -> PyResult<i32> {
         let this = slf.borrow();
-        if this.in_callback.get() {
-            return Err(PyRuntimeError::new_err("cannot be called from a handler"));
-        }
+        this.check_not_in_handler("Parse")?;
         let bytes = data_bytes(&this, data)?;
-        this.parse_bytes(slf.py(), &bytes, isfinal)
+        this.parse_bytes(slf.py(), &bytes, isfinal.0)
     }
 
     /// ParseFile(file): parse XML read from a file object.
@@ -838,6 +892,7 @@ impl XmlParser {
             .getattr("read")
             .map_err(|_| PyTypeError::new_err("argument must have 'read' attribute"))?;
         let this = slf.borrow();
+        this.check_not_in_handler("ParseFile")?;
         loop {
             let chunk = read.call1((READ_SIZE,))?;
             let bytes = chunk.cast::<PyBytes>().map_err(|_| {
@@ -888,10 +943,10 @@ impl XmlParser {
     }
 
     /// UseForeignDTD(flag=True): load an external DTD even without a DOCTYPE.
-    #[pyo3(name = "UseForeignDTD", signature = (flag = true))]
-    fn use_foreign_dtd(&self, py: Python<'_>, flag: bool) -> PyResult<()> {
+    #[pyo3(name = "UseForeignDTD", signature = (flag = Truth(true)))]
+    fn use_foreign_dtd(&self, py: Python<'_>, flag: Truth) -> PyResult<()> {
         // SAFETY: the parser is live.
-        let rc = unsafe { XML_UseForeignDTD(self.itself.get(), flag as XML_Bool) };
+        let rc = unsafe { XML_UseForeignDTD(self.itself.get(), flag.0 as XML_Bool) };
         if rc != 0 {
             return Err(self.error_from_parser(py));
         }
@@ -906,7 +961,8 @@ impl XmlParser {
 
     /// SetReparseDeferralEnabled(enabled): turn reparse deferral on or off.
     #[pyo3(name = "SetReparseDeferralEnabled")]
-    fn set_reparse_deferral_enabled(&self, enabled: bool) {
+    fn set_reparse_deferral_enabled(&self, enabled: Truth) {
+        let enabled = enabled.0;
         // SAFETY: the parser is live.
         unsafe { XML_SetReparseDeferralEnabled(self.itself.get(), enabled as XML_Bool) };
         self.reparse_deferral.set(enabled);

@@ -35,3 +35,22 @@ Call it at start-up, before anything imports those modules: it raises
 using libexpat. On Python 3.10 and 3.11, `_elementtree` can't be made to
 switch once imported.
 
+
+## Threads
+
+As with `pyexpat`, a parser may be used from any thread, though not from
+two at once.
+
+## Testing
+
+```sh
+pip install expat-rs     # or: maturin develop, from this directory
+python -m unittest discover -s tests
+python tests/stdlib.py   # CPython's XML test suites, through install()
+```
+
+`tests/stdlib.py` runs the interpreter's own test suites for `pyexpat`,
+ElementTree, SAX, minidom, pulldom, plistlib and xmlrpc with `install()` in
+effect; the interpreter needs its `test` package (or a CPython checkout's
+`Lib` directory of the same version on `PYTHONPATH`). CI does this on
+Linux, macOS and Windows for every supported CPython version.
