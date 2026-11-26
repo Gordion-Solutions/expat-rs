@@ -95,10 +95,19 @@ pub struct StreamParser<'l> {
     /// The last pass made progress before stalling, so the next chunk is
     /// tried at once whatever its size (as libexpat does).
     stall_fresh: bool,
+    /// When the last pass stalled inside the DOCTYPE: where libexpat's last
+    /// complete token there ends (offset in `buf`), and the input bytes
+    /// before it. Deferral is then measured from there, as libexpat's is
+    /// from its partial token (see `dtd_token_boundary`).
+    dtd_stall: Option<(usize, usize)>,
     /// Whether reparse deferral is on (the default).
     deferral: bool,
     /// `buf` starts inside a CDATA section reported in pieces.
     in_cdata: bool,
+    /// Inside the DOCTYPE's internal subset.
+    in_subset: bool,
+    /// The text consumed before `buf` ended with `\r`.
+    after_cr: bool,
     finished: bool,
 }
 
@@ -131,8 +140,11 @@ impl<'l> StreamParser<'l> {
             unknown_encoding: None,
             stalled_at: 0,
             stall_fresh: false,
+            dtd_stall: None,
             deferral: true,
             in_cdata: false,
+            in_subset: false,
+            after_cr: false,
             finished: false,
         }
     }
@@ -327,7 +339,7 @@ impl<'l> StreamParser<'l> {
                 let parsed = self.run(false, &mut *handler);
                 self.deferral = deferral;
                 parsed?;
-                Err(XmlError::Encoding { pos: self.base.advance(&self.buf), kind, reason })
+                Err(XmlError::Encoding { pos: self.base.advance_bytes(self.after_cr, self.buf.as_bytes()), kind, reason })
             }
             other => other,
         }
@@ -393,10 +405,24 @@ impl<'l> StreamParser<'l> {
     /// construct of length n cost at most about 9n in all: 5n for the
     /// quarter steps, 4n for the powers of two.
     fn worth_retrying(&self) -> bool {
+        if let Some((_, prefix)) = self.dtd_stall {
+            // libexpat's rule, from its partial token: once it has doubled.
+            return self.buffered_input().saturating_sub(prefix) >= 2 * self.stalled_at;
+        }
         let (now, then) = (self.buffered_input(), self.stalled_at);
         let grown = now.saturating_sub(then);
         now >= 2 * then
             || (grown >= 1024 && (4 * grown >= then || now.next_power_of_two() > then.next_power_of_two()))
+    }
+
+    /// Whether the character before offset `at` in `buf` is `\r` (for the
+    /// first, whether the text consumed before `buf` ended with one), so a
+    /// `\n` at `at` completes that line end.
+    fn cr_before(&self, at: usize) -> bool {
+        match at.checked_sub(1) {
+            Some(i) => self.buf.as_bytes()[i] == b'\r',
+            None => self.after_cr,
+        }
     }
 
     /// The input held for the next attempt, in bytes as given (as libexpat
@@ -420,7 +446,9 @@ impl<'l> StreamParser<'l> {
             .with_edition(self.state.edition)
             .with_libexpat_leniency(self.state.libexpat_leniency)
             .with_text_decl(self.state.entity_mode)
-            .with_cdata_pieces(self.state.cdata_pieces, self.in_cdata);
+            .with_cdata_pieces(self.state.cdata_pieces, self.in_cdata)
+            .in_subset(self.in_subset)
+            .after_cr_at_start(self.after_cr);
         let mut out = VecDeque::new();
         let mut consumed: Option<Position> = None;
         loop {
@@ -431,12 +459,37 @@ impl<'l> StreamParser<'l> {
                 Ok(Some(tok)) => {
                     let mut end = lexer.position();
                     let mut tok = tok;
+                    // Whitespace after the root element whose last character
+                    // is a `\r` at the end of the input so far: libexpat
+                    // delivers that `\r` on its own, after the rest.
+                    let mut lone_cr = None;
+                    if let Token::Text(text) = tok {
+                        if !self.state.in_content()
+                            && !self.state.before_root()
+                            && end.byte_offset == self.buf.len()
+                            && text.len() > 1
+                            && text.ends_with('\r')
+                            && !text.contains(|c| !matches!(c, ' ' | '\t' | '\r' | '\n'))
+                        {
+                            let head: &str = &text[..text.len() - 1];
+                            let at = start.advance_bytes(self.cr_before(start.byte_offset), head.as_bytes());
+                            lone_cr = Some((at, end));
+                            (end, tok) = (at, Token::Text(head));
+                        }
+                    }
                     let cut_off = !last && end.byte_offset == self.buf.len();
                     if let (Token::Text(text) | Token::CDataText(text), true) = (&tok, cut_off) {
                         // Text may continue in the next chunk: deliver it up
                         // to a point the next chunk can't change (a `\r` may
                         // start a line end, `]` a `]]>`).
-                        let keep = text.len() - text.trim_end_matches(['\r', ']']).len();
+                        let mut keep = text.len() - text.trim_end_matches(['\r', ']']).len();
+                        // Outside the root element, libexpat delivers
+                        // whitespace up to the end of the chunk: after the
+                        // root, `\r` too; before it, all but a last `\r`,
+                        // which may begin a line end.
+                        if matches!(tok, Token::Text(_)) && !self.state.in_content() {
+                            keep = (self.state.before_root() && text.ends_with('\r')) as usize;
+                        }
                         // Before the root, text other than whitespace is an
                         // error whose position depends on the whole run.
                         let stray = matches!(tok, Token::Text(_))
@@ -446,8 +499,18 @@ impl<'l> StreamParser<'l> {
                             break;
                         }
                         let text: &str = &text[..text.len() - keep];
-                        end = start.advance(text);
+                        end = start.advance_bytes(self.cr_before(start.byte_offset), text.as_bytes());
                         tok = if matches!(tok, Token::Text(_)) { Token::Text(text) } else { Token::CDataText(text) };
+                    }
+                    // In the internal subset likewise: all but a last `\r`.
+                    if let (Token::SubsetWhitespace(ws), true) = (&tok, cut_off) {
+                        if let Some(head) = ws.strip_suffix('\r') {
+                            if head.is_empty() {
+                                break;
+                            }
+                            end = start.advance_bytes(self.cr_before(start.byte_offset), head.as_bytes());
+                            tok = Token::SubsetWhitespace(head);
+                        }
                     }
                     // At the very end, a `]` or `\r` that could have begun a
                     // `]]>` or a line end leaves the section unclosed there,
@@ -456,7 +519,7 @@ impl<'l> StreamParser<'l> {
                     if let (Token::CDataText(text), true) = (&tok, last && end.byte_offset == self.buf.len()) {
                         let text: &str = text.trim_end_matches([']', '\r']);
                         if text.len() < end.byte_offset - start.byte_offset {
-                            let at = start.advance(text);
+                            let at = start.advance_bytes(self.cr_before(start.byte_offset), text.as_bytes());
                             if text.is_empty() {
                                 return Err(XmlError::UnexpectedEof { pos: at.rebase(base), context: "CDATA" });
                             }
@@ -472,7 +535,7 @@ impl<'l> StreamParser<'l> {
                             match text.rfind(['\n', '\r']) {
                                 Some(i) => {
                                     let kept: &str = &text[..=i];
-                                    (end, tok, doomed) = (start.advance(kept), Token::Text(kept), true);
+                                    (end, tok, doomed) = (start.advance_bytes(self.cr_before(start.byte_offset), kept.as_bytes()), Token::Text(kept), true);
                                 }
                                 None => continue,
                             }
@@ -481,19 +544,37 @@ impl<'l> StreamParser<'l> {
                     match tok {
                         Token::CDataStart => self.in_cdata = true,
                         Token::CDataEnd => self.in_cdata = false,
+                        Token::Doctype { has_internal_subset: true, .. } => self.in_subset = true,
+                        Token::DoctypeEnd => self.in_subset = false,
                         _ => {}
                     }
                     let dtd: Dtd = lexer.take_dtd();
                     self.state.span = Span { start, end };
+                    self.state.cr_before_token = self.cr_before(start.byte_offset);
                     self.state.direct_bytes = end.rebase(base).byte_offset as u64;
                     self.state.handle(tok, dtd, &mut out).map_err(|e| e.rebase(base))?;
-                    for (event, span) in out.drain(..) {
+                    for (event, span, entity_raw) in out.drain(..) {
                         let input_start = self.input_at(span.start.byte_offset);
                         let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                         let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
-                        handler(Located { event, span, raw, input_start });
+                        handler(Located { event, span, raw, input_start, entity_raw });
                     }
                     consumed = Some(end);
+                    if let Some((cr_start, cr_end)) = lone_cr {
+                        self.state.span = Span { start: cr_start, end: cr_end };
+                        self.state.cr_before_token = self.cr_before(cr_start.byte_offset);
+                        self.state.direct_bytes = cr_end.rebase(base).byte_offset as u64;
+                        let cr: &str = &self.buf[cr_start.byte_offset..cr_end.byte_offset];
+                        self.state.handle(Token::Text(cr), Dtd::default(), &mut out).map_err(|e| e.rebase(base))?;
+                        for (event, span, entity_raw) in out.drain(..) {
+                            let input_start = self.input_at(span.start.byte_offset);
+                            let raw = self.buf.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
+                            let span = Span { start: span.start.rebase(base), end: span.end.rebase(base) };
+                            handler(Located { event, span, raw, input_start, entity_raw });
+                        }
+                        consumed = Some(cr_end);
+                        continue;
+                    }
                     if let Some(at) = unclosed {
                         return Err(XmlError::UnexpectedEof { pos: at.rebase(base), context: "CDATA" });
                     }
@@ -525,12 +606,25 @@ impl<'l> StreamParser<'l> {
             self.measured.set((0, 0));
             self.measured_end.set((0, 0));
             self.base = end.rebase(base);
+            self.after_cr = self.buf[..end.byte_offset].ends_with('\r');
             self.buf.drain(..end.byte_offset);
             self.at_start = false;
         }
         // Whatever is left is an incomplete construct (or held-back text).
         self.stalled_at = if last { 0 } else { self.buffered_input() };
         self.stall_fresh = consumed.is_some();
+        // In the DOCTYPE, libexpat's tokens are smaller than a declaration
+        // (keywords, names, literals): it makes progress, and measures its
+        // deferral, token by token. Emulated while the declaration held is
+        // short, so the re-scans stay cheap; beyond that, the rule above.
+        let previous = self.dtd_stall.take();
+        if !last && (self.in_subset || self.buf.starts_with("<!DOCTYPE")) && self.buf.len() <= 1024 {
+            let boundary = crate::lexer::dtd_token_boundary(&self.buf);
+            let prefix = self.decoder.input_len(&self.buf[..boundary]);
+            self.stall_fresh |= previous.is_some_and(|(b, _)| boundary > b);
+            self.stalled_at -= prefix.min(self.stalled_at);
+            self.dtd_stall = Some((boundary, prefix));
+        }
         Ok(())
     }
 }

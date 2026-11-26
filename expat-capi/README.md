@@ -62,7 +62,13 @@ LIBEXPAT_CFLAGS=-I<expat-capi>/include LIBEXPAT_LDFLAGS="-L<staged dir>
 what libexpat 2.8.2 prints (`tests/c/*.expected`, recorded by
 `tools/regen_expected.sh`): callbacks and their arguments, line, column and
 byte positions, error codes, messages and positions, stopping, buffers,
-encodings, content models, settings. `tests/c/android_consumers.c` calls the
+encodings, content models, settings, and DTD declarations with every
+handler and the default handler set at once (`tests/c/declarations.c`),
+markup in entities' replacement text reaching the default handler and
+`XML_DefaultCurrent` (`tests/c/entities.c`), and namespace URIs that
+contain the namespace separator, which libexpat rejects since
+CVE-2022-25236 (`tests/c/ns_separator.c`).
+`tests/c/android_consumers.c` calls the
 API the way Android's users of libexpat do (libcore's ExpatParser, Skia,
 aapt2 and aapt, frameworks/av, audio_route, the wayland scanner), following
 their AOSP source.
@@ -77,8 +83,9 @@ column) and the exit status were identical in all 4272 runs.
 build, such as Homebrew's) over the W3C conformance suite on libexpat and on
 expat-capi and compares exit status, messages and written output in five
 modes. On 15 Nov 2026, 2638 files: every document libexpat accepts gives
-identical output, no verdict differs, and about 1050 malformed documents get a different error
-message or position (see below).
+identical output and no verdict differs. Since 16 Nov, about 260
+malformed documents get a different error message or position (see
+below); about 1050 did before a column count after `\r\n` was fixed.
 
 `src/generated.rs` (constants, error strings, struct sizes) is generated
 from the header and libexpat's `XML_ErrorString` by `tools/generate.py`;
@@ -118,7 +125,22 @@ Not yet run on a physical device.
 - `XML_StopParser(parser, XML_TRUE)` (suspend) isn't supported;
   `XML_ResumeParser` isn't exported.
 - `XML_GetInputContext` returns NULL.
-- For about 1050 of the suite's malformed documents (mostly in DTDs) the
+- Parameter entity references in the internal subset aren't expanded,
+  even with parameter entity parsing on: an external one goes to the
+  external entity handler (whose parser doesn't read it), and declarations
+  after one are treated as libexpat treats them after an unread one.
+- The text of a declaration that goes to the default handler (one
+  without its handler, declared again, or not processed after an unread
+  parameter entity reference), and of the DOCTYPE's header without a
+  DOCTYPE handler, is delivered when the declaration is complete;
+  libexpat delivers each word as it arrives, so with the DOCTYPE fed in
+  small pieces that is a call or two earlier. `tests/c/dtd_words.c`
+  records it.
+- When the input comes in very small pieces, where text is split between
+  calls can still differ in a few documents (in the W3C suite, 3 of 2638
+  documents fed 7 bytes at a time, 20 fed one byte at a time). The text
+  delivered is the same.
+- For about 260 of the suite's malformed documents (mostly in DTDs) the
   error is classified or placed differently: libexpat's grammar reports
   "syntax error" where expat-rs finds an invalid token and the reverse,
   and positions follow. Same verdict in every case.

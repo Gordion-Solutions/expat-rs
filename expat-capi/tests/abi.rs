@@ -103,3 +103,32 @@ fn unknown_encodings_match_libexpat() {
 fn parser_reset_matches_libexpat() {
     check_probe("reset");
 }
+
+#[test]
+fn declarations_match_libexpat() {
+    check_probe("declarations");
+}
+
+#[test]
+fn dtd_in_pieces_matches_libexpat() {
+    check_probe("dtd_pieces");
+}
+
+/// The words of a declaration that go to the default handler: libexpat
+/// passes each as it arrives, expat-capi when the declaration is complete
+/// (see tests/c/dtd_words.c and the README).
+#[test]
+#[ignore = "a declaration's words reach the default handler when it is complete"]
+fn declaration_words_in_pieces_match_libexpat() {
+    check_probe("dtd_words");
+}
+
+#[test]
+fn entity_markup_to_default_matches_libexpat() {
+    check_probe("entities");
+}
+
+#[test]
+fn namespace_separator_in_uri_matches_libexpat() {
+    check_probe("ns_separator");
+}

@@ -21,6 +21,9 @@ impl<'a> Lexer<'a> {
     ///
     ///   doctypedecl ::= '<!DOCTYPE' S Name (S ExternalID)? S?
     ///                   ('[' intSubset ']' S?)? '>'
+    ///
+    /// Up to the `[` that opens the internal subset, whose items are then
+    /// tokens of their own (`scan_subset_token`), or the closing `>`.
     pub(super) fn scan_doctype(&mut self) -> Result<Token<'a>> {
         debug_assert!(self.src[self.pos.byte_offset..].starts_with(b"<!DOCTYPE"));
         self.advance_ascii(b"<!DOCTYPE".len());
@@ -39,46 +42,49 @@ impl<'a> Lexer<'a> {
             self.dtd.external_subset = true;
             self.skip_whitespace();
         }
+        let body = self.slice(body_start).trim();
         let has_internal_subset = self.current() == Some(b'[');
         if has_internal_subset {
             self.bump();
             self.in_subset = true;
-            let subset = self.scan_internal_subset();
-            self.in_subset = false;
-            subset?;
-            self.bump(); // ]
-            self.skip_whitespace();
+        } else if self.current() == Some(b'>') {
+            self.bump();
+        } else {
+            return Err(self.eof_or_not_wf("DOCTYPE", "expected '[' or '>' after the DOCTYPE's name or external ID"));
         }
-        if self.current() != Some(b'>') {
-            return Err(self.eof_or_not_wf("DOCTYPE", "expected '>' to close DOCTYPE"));
-        }
-        let body = self.slice(body_start).trim();
-        self.bump();
         Ok(Token::Doctype { name, body, system_id, public_id, has_internal_subset })
     }
 
-    /// §2.8 [Productions 28a, 28b]:
+    /// The next token of the internal subset, §2.8 [Productions 28a, 28b]:
     ///
     ///   intSubset ::= (markupdecl | DeclSep)*
     ///   DeclSep   ::= PEReference | S
     ///   markupdecl ::= elementdecl | AttlistDecl | EntityDecl
     ///                | NotationDecl | PI | Comment
     ///
-    /// Stops at the closing ']' without consuming it.
-    fn scan_internal_subset(&mut self) -> Result<()> {
-        loop {
-            self.skip_whitespace();
-            // Every declaration recorded below gets the span of the
-            // construct it came from.
-            let start = self.pos;
-            self.scan_subset_item()?;
-            while self.dtd.spans.len() < self.dtd.decls.len() {
-                self.dtd.spans.push((start, self.pos));
-            }
-            if self.current() == Some(b']') {
-                return Ok(());
-            }
+    /// then `]` S? `>`, which closes the DOCTYPE.
+    pub(super) fn scan_subset_token(&mut self) -> Result<Token<'a>> {
+        let start = self.pos;
+        if self.skip_whitespace() {
+            return Ok(Token::SubsetWhitespace(self.slice(start.byte_offset)));
         }
+        if self.current() == Some(b']') {
+            self.bump();
+            self.skip_whitespace();
+            if self.current() != Some(b'>') {
+                return Err(self.eof_or_not_wf("DOCTYPE", "expected '>' to close DOCTYPE"));
+            }
+            self.bump();
+            self.in_subset = false;
+            return Ok(Token::DoctypeEnd);
+        }
+        self.dtd = Dtd::default();
+        self.scan_subset_item()?;
+        // Every declaration recorded gets the span of the item.
+        while self.dtd.spans.len() < self.dtd.decls.len() {
+            self.dtd.spans.push((start, self.pos));
+        }
+        Ok(Token::SubsetDecl(self.slice(start.byte_offset)))
     }
 
     /// One item of the internal subset (or nothing, at the closing ']').

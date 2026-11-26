@@ -1,0 +1,74 @@
+case 0, triplets 0
+  -> syntax error @1:0 byte 0
+case 0, triplets 1
+  -> syntax error @1:0 byte 0
+case 1, triplets 0
+  -> syntax error @1:0 byte 0
+case 1, triplets 1
+  -> syntax error @1:0 byte 0
+case 2, triplets 0
+  xmlns:b=ok
+  -> syntax error @1:0 byte 0
+case 2, triplets 1
+  xmlns:b=ok
+  -> syntax error @1:0 byte 0
+case 3, triplets 0
+  <e>
+  xmlns:a=u
+  <f>
+  -> syntax error @2:20 byte 24
+case 3, triplets 1
+  <e>
+  xmlns:a=u
+  <f>
+  -> syntax error @2:20 byte 24
+case 4, triplets 0
+  -> syntax error @1:0 byte 0
+case 4, triplets 1
+  -> syntax error @1:0 byte 0
+case 5, triplets 0
+  xmlns:(none)=x{y
+  <x{y}e>
+case 5, triplets 1
+  xmlns:(none)=x{y
+  <x{y}e>
+case 6, triplets 0
+  xmlns:a=x!y
+  <e>
+case 6, triplets 1
+  xmlns:a=x!y
+  <e>
+case 7, triplets 0
+  xmlns:a=x:y
+  <e>
+case 7, triplets 1
+  xmlns:a=x:y
+  <e>
+case 8, triplets 0
+  xmlns:a=x#y
+  <e>
+case 8, triplets 1
+  xmlns:a=x#y
+  <e>
+case 9, triplets 0
+  -> syntax error @1:0 byte 0
+case 9, triplets 1
+  -> syntax error @1:0 byte 0
+case 10, triplets 0
+  -> syntax error @1:0 byte 0
+case 10, triplets 1
+  -> syntax error @1:0 byte 0
+case 11, triplets 0
+  -> syntax error @1:47 byte 47
+case 11, triplets 1
+  -> syntax error @1:47 byte 47
+case 12, triplets 0
+  <e>
+  -> syntax error @1:48 byte 48
+case 12, triplets 1
+  <e>
+  -> syntax error @1:48 byte 48
+case 13, triplets 0
+  -> syntax error @1:0 byte 0
+case 13, triplets 1
+  -> syntax error @1:0 byte 0

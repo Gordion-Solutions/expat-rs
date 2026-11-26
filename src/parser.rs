@@ -24,10 +24,11 @@ use crate::chars::{is_name_char, Edition};
 use crate::external::EntityContext;
 use crate::entities::{AmplificationLimits, AttDecl, AttlistTable, Dtd, DtdDecl, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
-use crate::event::{normalize_newlines, Attribute, Event, Located, Span};
+use crate::event::{normalize_newlines, Attribute, EntityRaw, Event, Located, Span};
 
 /// Events produced while handling a token, each with its span.
-pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span)>;
+/// Events produced, with where they came from (see [`Located`]).
+pub(crate) type Out<'t> = VecDeque<(Event<'t>, Span, EntityRaw)>;
 use crate::expand::{ExpandSettings, Expander, ExternalLoader};
 use crate::lexer::Lexer;
 use crate::namespaces::Namespaces;
@@ -81,6 +82,9 @@ pub(crate) struct State<'l> {
     saw_doctype: bool,
     /// Where the token being handled starts, for error reports.
     pub last_pos: Position,
+    /// The character before that token is `\r` (in an earlier chunk), so a
+    /// `\n` starting the token ends no line.
+    pub(crate) cr_before_token: bool,
     /// Span attached to the events being emitted: the token being handled,
     /// or the internal-subset declaration being processed.
     pub span: Span,
@@ -115,6 +119,14 @@ pub(crate) struct State<'l> {
     /// standalone="yes". Otherwise an undeclared entity is a validity
     /// error, not a well-formedness one.
     entity_declared_wfc: bool,
+    /// Inside the internal subset (where the DOCTYPE starts).
+    in_subset: Option<Position>,
+    /// The DOCTYPE names an external subset.
+    dtd_external: bool,
+    /// The internal subset has referred to a parameter entity so far.
+    dtd_pe_refs: bool,
+    /// After a parameter entity reference that wasn't read (§5.1).
+    after_unread_pe: bool,
     /// Caller-supplied loader for external parsed entities. `None` (the
     /// default) never reads anything outside the document.
     pub loader: Option<Box<ExternalLoader<'l>>>,
@@ -140,6 +152,7 @@ impl<'l> State<'l> {
             saw_xmldecl: false,
             saw_doctype: false,
             last_pos: Position::start(),
+            cr_before_token: false,
             span: Span { start: Position::start(), end: Position::start() },
             entities: Arc::new(EntityTable::new()),
             attlists: Arc::new(AttlistTable::default()),
@@ -153,6 +166,10 @@ impl<'l> State<'l> {
             pending_stray: None,
             standalone: None,
             entity_declared_wfc: true,
+            in_subset: None,
+            dtd_external: false,
+            dtd_pe_refs: false,
+            after_unread_pe: false,
             loader: None,
             namespaces: None,
             expansion_limits: ExpansionLimits::default(),
@@ -188,7 +205,7 @@ impl<'l> State<'l> {
     /// character). A run reaching the end of this text token is decided by
     /// what follows, so it is left pending.
     fn stray_text(&mut self, s: &str, i: usize) -> Result<()> {
-        let run = self.last_pos.advance(&s[..i]);
+        let run = self.last_pos.advance_bytes(self.cr_before_token, &s.as_bytes()[..i]);
         let len = s[i..].find(|c: char| !is_name_char(c, self.edition)).unwrap_or(s.len() - i);
         let end = run.advance(&s[i..i + len]);
         let error = |pos, kind| Err(XmlError::NotWellFormed { pos, kind,
@@ -278,9 +295,15 @@ impl<'l> State<'l> {
 
     /// Deliver an event, through namespace processing if it is enabled.
     fn emit<'t>(&mut self, event: Event<'t>, out: &mut Out<'t>) -> Result<()> {
+        self.emit_from(event, None, out)
+    }
+
+    /// Deliver an event from an entity's replacement text (`entity_raw`, see
+    /// [`Located::entity_raw`]), or from the document if `None`.
+    fn emit_from<'t>(&mut self, event: Event<'t>, entity_raw: EntityRaw, out: &mut Out<'t>) -> Result<()> {
         match &mut self.namespaces {
-            Some(ns) => ns.process(event, self.span, self.last_pos, out)?,
-            None => out.push_back((event, self.span)),
+            Some(ns) => ns.process(event, self.span, entity_raw, self.last_pos, out)?,
+            None => out.push_back((event, self.span, entity_raw)),
         }
         Ok(())
     }
@@ -320,22 +343,39 @@ impl<'l> State<'l> {
         Ok(out)
     }
 
-    /// Act on the internal subset's declarations in document order (§5.1),
-    /// delivering the events for what it contained.
-    fn process_dtd<'t>(&mut self, dtd: Dtd, out: &mut Out<'t>) -> Result<()> {
-        let has_pe_refs = dtd.decls.iter().any(|d| matches!(d, DtdDecl::PeRef(_)));
-        self.entity_declared_wfc = self.standalone == Some(true)
-            || (!dtd.external_subset && !has_pe_refs);
+    /// Namespaces §7: a declared name with a colon, reported as libexpat
+    /// does, as a syntax error at the name in the declaration `raw`.
+    fn colon_in_decl_name(&self, raw: &str, keyword: &str, name: &str, what: &str) -> XmlError {
+        let at = raw.get(keyword.len()..).and_then(|r| r.find(name)).map_or(0, |i| i + keyword.len());
+        XmlError::NotWellFormed {
+            pos: self.span.start.advance(&raw[..at]),
+            kind: ErrorKind::Syntax,
+            reason: format!("{what} name {name:?} contains a colon (Namespaces §7)"),
+        }
+    }
+
+    /// Whether §4.1 WFC Entity Declared applies, from what the DOCTYPE has
+    /// shown so far.
+    fn update_entity_declared_wfc(&mut self) {
+        self.entity_declared_wfc = self.standalone == Some(true) || (!self.dtd_external && !self.dtd_pe_refs);
+    }
+
+    /// Act on one item of the internal subset (§5.1), delivering the events
+    /// for what it contains.
+    fn process_dtd<'t>(&mut self, dtd: Dtd, raw: &str, out: &mut Out<'t>) -> Result<()> {
         // Parameter entities are not read yet, so per §5.1 entity and
         // attribute-list declarations after an unread one are not
-        // processed. Other declarations still are.
-        let mut after_unread_pe = false;
-        let doctype_span = self.span;
+        // processed, unless the document is standalone="yes", when they
+        // MUST be. Other declarations always are.
+        let standalone = self.standalone == Some(true);
+        let item_span = self.span;
         for (decl, (start, end)) in dtd.decls.into_iter().zip(dtd.spans) {
             self.span = Span { start, end };
             match decl {
                 DtdDecl::PeRef(name) => {
-                    after_unread_pe = true;
+                    self.dtd_pe_refs = true;
+                    self.update_entity_declared_wfc();
+                    self.after_unread_pe = !standalone;
                     self.emit(Event::ParameterEntityRef(Cow::Owned(name)), out)?;
                 }
                 DtdDecl::Pi { target, body } => {
@@ -344,6 +384,10 @@ impl<'l> State<'l> {
                 }
                 DtdDecl::Comment(body) => {
                     self.emit(Event::Comment(Cow::Owned(normalize_newlines(&body).into_owned())), out)?;
+                }
+                DtdDecl::Notation { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
+                    // A syntax error at the name, as libexpat reports it.
+                    return Err(self.colon_in_decl_name(raw, "<!NOTATION", name, "notation"));
                 }
                 DtdDecl::Notation { name, public_id, system_id } => {
                     self.emit(Event::NotationDecl {
@@ -355,9 +399,10 @@ impl<'l> State<'l> {
                 DtdDecl::Element { name, model } => {
                     self.emit(Event::ElementDecl { name: Cow::Owned(name), model }, out)?;
                 }
-                _ if after_unread_pe => {}
+                _ if self.after_unread_pe => {}
                 DtdDecl::Entity { ref name, .. } if self.namespaces.is_some() && name.contains(':') => {
-                    return Err(self.not_wf(ErrorKind::InvalidToken, format!("entity name {name:?} contains a colon (Namespaces §7)")));
+                    // A syntax error at the name, as libexpat reports it.
+                    return Err(self.colon_in_decl_name(raw, "<!ENTITY", name, "entity"));
                 }
                 DtdDecl::Entity { name, parameter, def } => {
                     let event = match &def {
@@ -400,8 +445,8 @@ impl<'l> State<'l> {
                 }
             }
         }
-        self.span = doctype_span;
-        self.emit(Event::EndDoctype, out)
+        self.span = item_span;
+        Ok(())
     }
 
     /// End of input: everything opened must have closed.
@@ -413,6 +458,10 @@ impl<'l> State<'l> {
                 Some(open) => Err(self.not_wf(ErrorKind::AsyncEntity, format!("entity ends inside element {open:?}"))),
                 None => Ok(()),
             };
+        }
+        if self.in_subset.is_some() {
+            // Reported where the input ends, as libexpat does.
+            return Err(XmlError::UnexpectedEof { pos: self.last_pos, context: "DOCTYPE internal subset" });
         }
         if let Some(run) = self.pending_stray {
             // The run of name characters ended the input.
@@ -483,6 +532,10 @@ impl<'l> State<'l> {
                     return Err(self.not_wf(ErrorKind::JunkAfterDocElement, "DOCTYPE must appear before the root element"));
                 }
                 self.saw_doctype = true;
+                self.dtd_external = dtd.external_subset;
+                self.dtd_pe_refs = false;
+                self.after_unread_pe = false;
+                self.update_entity_declared_wfc();
                 self.emit(Event::Doctype {
                     name,
                     body,
@@ -490,7 +543,34 @@ impl<'l> State<'l> {
                     public_id: public_id.map(Cow::Borrowed),
                     has_internal_subset,
                 }, out)?;
-                self.process_dtd(dtd, out)
+                if has_internal_subset {
+                    self.in_subset = Some(self.last_pos);
+                    return Ok(());
+                }
+                // Without an internal subset, the DOCTYPE ends at its '>'.
+                let end = self.span.end;
+                self.span.start = Position { column: end.column - 1, byte_offset: end.byte_offset - 1, ..end };
+                self.emit(Event::EndDoctype, out)
+            }
+            Token::SubsetDecl(raw) => {
+                let before = out.len();
+                self.process_dtd(dtd, raw, out)?;
+                // A declaration nothing else reports, so the events' source
+                // text still covers the document (see outside_whitespace).
+                if out.len() == before && self.outside_whitespace {
+                    self.emit(Event::OtherDecl(Cow::Borrowed(raw)), out)?;
+                }
+                Ok(())
+            }
+            Token::SubsetWhitespace(s) => {
+                if self.outside_whitespace {
+                    return self.emit(Event::Whitespace(normalize_newlines(s)), out);
+                }
+                Ok(())
+            }
+            Token::DoctypeEnd => {
+                self.in_subset = None;
+                self.emit(Event::EndDoctype, out)
             }
             Token::StartTag { name, attributes } => {
                 self.start_element_allowed()?;
@@ -532,7 +612,7 @@ impl<'l> State<'l> {
                     if let Some(i) = s.find(|c: char| !matches!(c, ' ' | '\t' | '\r' | '\n')) {
                         if self.phase == Phase::Epilog {
                             // Report the first character that isn't whitespace.
-                            self.last_pos = self.last_pos.advance(&s[..i]);
+                            self.last_pos = self.last_pos.advance_bytes(self.cr_before_token, &s.as_bytes()[..i]);
                             return Err(self.outside_root("non-whitespace text outside the root element"));
                         }
                         return self.stray_text(s, i);
@@ -575,10 +655,10 @@ impl<'l> State<'l> {
                     return self.emit(Event::Text(Cow::Borrowed(text)), out);
                 }
                 let mut x = self.expander();
-                x.check_content_entity(name)?;
+                x.check_content_entity(name, None)?;
                 let (used, events) = (x.expanded, std::mem::take(&mut x.events));
                 self.charge(used)?;
-                events.into_iter().try_for_each(|e| self.emit(e, out))
+                events.into_iter().try_for_each(|(e, raw)| self.emit_from(e, raw, out))
             }
             Token::CharRef(c) => {
                 if !self.in_content() {
@@ -685,10 +765,10 @@ impl<'a> Parser<'a> {
     /// and the source text it came from.
     pub fn next_located(&mut self) -> Result<Option<Located<'a>>> {
         loop {
-            if let Some((event, span)) = self.out.pop_front() {
+            if let Some((event, span, entity_raw)) = self.out.pop_front() {
                 let raw = self.src.get(span.start.byte_offset..span.end.byte_offset).unwrap_or("");
                 // The input is the text itself.
-                return Ok(Some(Located { event, span, raw, input_start: span.start.byte_offset }));
+                return Ok(Some(Located { event, span, raw, input_start: span.start.byte_offset, entity_raw }));
             }
             if self.done {
                 return Ok(None);

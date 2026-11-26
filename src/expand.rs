@@ -20,12 +20,13 @@
 //! billion-laughs and quadratic-blowup payloads.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use crate::chars::{decode_char_ref, is_name_char, is_name_start_char, Edition};
 use crate::entities::{builtin_entity, AttlistTable, EntityDef, EntityTable, ExpansionLimits};
 use crate::error::{ErrorKind, Position, Result, XmlError};
 use crate::lexer::Lexer;
-use crate::event::{normalize_newlines, Attribute, Event};
+use crate::event::{normalize_newlines, Attribute, EntityRaw, Event};
 use crate::external::EntityContext;
 use crate::token::{Attr, Token};
 
@@ -66,8 +67,10 @@ pub(crate) struct Expander<'e, 'l> {
     pub expanded: usize,
     /// Entities currently being expanded, outermost first.
     stack: Vec<String>,
-    /// Events produced by expanding content entities, in document order.
-    pub events: Vec<Event<'static>>,
+    /// Events produced by expanding content entities, in document order,
+    /// each with the replacement text it came from (`None` for the
+    /// reference being checked itself: an entity not read).
+    pub events: Vec<(Event<'static>, EntityRaw)>,
     /// When external entity references are reported for the caller to read
     /// (see `crate::external`): the document's part of their context.
     external: Option<EntityContext>,
@@ -227,16 +230,19 @@ impl<'e, 'l> Expander<'e, 'l> {
     }
 
     /// Check an entity reference that appears in content, collecting the
-    /// events its replacement text produces into `self.events`.
-    pub fn check_content_entity(&mut self, name: &str) -> Result<()> {
+    /// events its replacement text produces into `self.events`. `raw` is the
+    /// reference as written in the replacement text it is in, or `None` for
+    /// a reference in the document.
+    pub fn check_content_entity(&mut self, name: &str, raw: Option<&str>) -> Result<()> {
+        let raw: EntityRaw = raw.map(Arc::from);
         if let Some(text) = builtin_entity(name) {
-            self.events.push(Event::Text(Cow::Borrowed(text)));
+            self.events.push((Event::Text(Cow::Borrowed(text)), raw));
             return Ok(());
         }
         match self.table.get(name) {
             None => {
                 self.undeclared(name)?;
-                self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
+                self.events.push((Event::SkippedEntity(Cow::Owned(name.to_string())), raw));
                 Ok(())
             }
             Some(EntityDef::External { unparsed: true, .. }) => {
@@ -270,17 +276,17 @@ impl<'e, 'l> Expander<'e, 'l> {
                             context.name = name.to_string();
                             context.open.extend(self.stack.iter().cloned());
                             context.open.push(name.to_string());
-                            self.events.push(Event::ExternalEntityRef {
+                            self.events.push((Event::ExternalEntityRef {
                                 name: Cow::Owned(name.to_string()),
                                 system_id: Cow::Owned(system_id.clone()),
                                 public_id: public_id.clone().map(Cow::Owned),
                                 context,
-                            });
+                            }, raw));
                             Ok(())
                         }
                         None => {
                             // Not read (§4.4.3).
-                            self.events.push(Event::SkippedEntity(Cow::Owned(name.to_string())));
+                            self.events.push((Event::SkippedEntity(Cow::Owned(name.to_string())), raw));
                             Ok(())
                         }
                     },
@@ -311,47 +317,54 @@ impl<'e, 'l> Expander<'e, 'l> {
             lexer.skip_text_decl().map_err(in_entity)?;
         }
         let mut open: Vec<&str> = Vec::new();
-        while let Some(tok) = lexer.next_token().map_err(in_entity)? {
+        loop {
+            let start = lexer.position().byte_offset;
+            let Some(tok) = lexer.next_token().map_err(in_entity)? else { break };
+            let raw = &text[start..lexer.position().byte_offset];
+            let from: EntityRaw = Some(Arc::from(raw));
             match tok {
                 Token::StartTag { name: tag, attributes } => {
                     let attributes = self.tag_attributes(tag, &attributes)?;
-                    self.events.push(Event::StartElement { name: owned(tag), namespace: None, attributes });
+                    self.events.push((Event::StartElement { name: owned(tag), namespace: None, attributes }, from));
                     open.push(tag);
                 }
                 Token::EmptyTag { name: tag, attributes } => {
                     let attributes = self.tag_attributes(tag, &attributes)?;
-                    self.events.push(Event::StartElement { name: owned(tag), namespace: None, attributes });
-                    self.events.push(Event::EndElement(owned(tag)));
+                    self.events.push((Event::StartElement { name: owned(tag), namespace: None, attributes }, from.clone()));
+                    self.events.push((Event::EndElement(owned(tag)), from));
                 }
                 Token::EndTag(tag) => match open.pop() {
-                    Some(start) if start == tag => self.events.push(Event::EndElement(owned(tag))),
+                    Some(start) if start == tag => self.events.push((Event::EndElement(owned(tag)), from)),
                     _ => return Err(self.error(ErrorKind::AsyncEntity, format!(
                         "end tag </{tag}> in entity {name:?} has no matching start tag in the same entity"))),
                 },
-                Token::EntityRef(inner) => self.check_content_entity(inner)?,
-                Token::CharRef(c) => self.events.push(Event::Text(Cow::Owned(c.to_string()))),
-                Token::Text(t) => self.events.push(Event::Text(owned(t))),
+                Token::EntityRef(inner) => self.check_content_entity(inner, Some(raw))?,
+                Token::CharRef(c) => self.events.push((Event::Text(Cow::Owned(c.to_string())), from)),
+                Token::Text(t) => self.events.push((Event::Text(owned(t)), from)),
                 // A section in replacement text is whole: as one piece,
                 // when they are asked for.
                 Token::CData(t) if self.cdata_pieces => {
-                    self.events.push(Event::StartCData);
+                    self.events.push((Event::StartCData, Some(Arc::from("<![CDATA["))));
                     if !t.is_empty() {
-                        self.events.push(Event::CData(owned(t)));
+                        self.events.push((Event::CData(owned(t)), Some(Arc::from(t))));
                     }
-                    self.events.push(Event::EndCData);
+                    self.events.push((Event::EndCData, Some(Arc::from("]]>"))));
                 }
-                Token::CData(t) => self.events.push(Event::CData(owned(t))),
+                Token::CData(t) => self.events.push((Event::CData(owned(t)), from)),
                 Token::CDataStart | Token::CDataText(_) | Token::CDataEnd => {
                     unreachable!("replacement text is tokenised with whole CDATA sections")
                 }
-                Token::Comment(t) => self.events.push(Event::Comment(owned(t))),
+                Token::Comment(t) => self.events.push((Event::Comment(owned(t)), from)),
                 Token::ProcessingInstruction { target, body } => {
-                    self.events.push(Event::ProcessingInstruction { target: owned(target), body: owned(body) });
+                    self.events.push((Event::ProcessingInstruction { target: owned(target), body: owned(body) }, from));
                 }
                 Token::XmlDecl(_) => return Err(self.error(ErrorKind::MisplacedXmlPi, format!(
                     "XML or text declaration not allowed in the replacement text of entity {name:?}"))),
                 Token::Doctype { .. } => return Err(self.error(ErrorKind::InvalidToken, format!(
                     "DOCTYPE not allowed in the replacement text of entity {name:?}"))),
+                Token::SubsetDecl(_) | Token::SubsetWhitespace(_) | Token::DoctypeEnd => {
+                    unreachable!("a DOCTYPE in replacement text is an error at its start")
+                }
             }
         }
         if let Some(tag) = open.last() {

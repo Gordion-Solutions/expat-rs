@@ -1,0 +1,579 @@
+doc 0, none, whole
+  default [<d>] @1:86
+  default [a] @1:89
+  default [<b x='1'>] @1:89
+  default [c] @1:89
+  default [<!--k-->] @1:89
+  default [<?p q?>] @1:89
+  default [<![CDATA[] @1:89
+  default [z] @1:89
+  default []]>] @1:89
+  default [</b>] @1:89
+  default [&amp;] @1:89
+  default [A] @1:89
+  default [<x/>] @1:89
+  default [</d>] @1:92
+doc 0, text, whole
+  <d> @1:86
+  [a] @1:89
+  <b> @1:89
+  [c] @1:89
+  default [<!--k-->] @1:89
+  default [<?p q?>] @1:89
+  default [<![CDATA[] @1:89
+  [z] @1:89
+  default []]>] @1:89
+  </b> @1:89
+  [&] @1:89
+  [A] @1:89
+  <x> @1:89
+  </x> @1:89
+  </d> @1:92
+doc 0, etree, whole
+  <d> @1:86
+  [a] @1:89
+  <b> @1:89
+  [c] @1:89
+  comment [k] @1:89
+  pi [p] [q] @1:89
+  default [<![CDATA[] @1:89
+  [z] @1:89
+  default []]>] @1:89
+  </b> @1:89
+  [&] @1:89
+  [A] @1:89
+  <x> @1:89
+  </x> @1:89
+  </d> @1:92
+doc 0, all, whole
+  <d> @1:86
+  [a] @1:89
+  <b> @1:89
+  [c] @1:89
+  comment [k] @1:89
+  pi [p] [q] @1:89
+  start-cdata @1:89
+  [z] @1:89
+  end-cdata @1:89
+  </b> @1:89
+  [&] @1:89
+  [A] @1:89
+  <x> @1:89
+  </x> @1:89
+  </d> @1:92
+doc 0, current, whole
+  <d> @1:86
+  default [<d>] @1:86
+  [a] @1:89
+  default [a] @1:89
+  <b> @1:89
+  default [<b x='1'>] @1:89
+  [c] @1:89
+  default [c] @1:89
+  default [<!--k-->] @1:89
+  default [<?p q?>] @1:89
+  default [<![CDATA[] @1:89
+  [z] @1:89
+  default [z] @1:89
+  default []]>] @1:89
+  </b> @1:89
+  default [</b>] @1:89
+  [&] @1:89
+  default [&amp;] @1:89
+  [A] @1:89
+  default [A] @1:89
+  <x> @1:89
+  default [<x/>] @1:89
+  </x> @1:89
+  default [] @1:89
+  </d> @1:92
+  default [</d>] @1:92
+doc 0, etree, 1-byte pieces
+  <d> @1:86
+  [a] @1:89
+  <b> @1:89
+  [c] @1:89
+  comment [k] @1:89
+  pi [p] [q] @1:89
+  default [<![CDATA[] @1:89
+  [z] @1:89
+  default []]>] @1:89
+  </b> @1:89
+  [&] @1:89
+  [A] @1:89
+  <x> @1:89
+  </x> @1:89
+  </d> @1:92
+doc 1, none, whole
+  default [<d>] @1:65
+  default [1] @1:68
+  default [<![CDATA[] @1:68
+  default [&foo;] @1:68
+  default []]>] @1:68
+  default [2] @1:68
+  default [</d>] @1:71
+doc 1, text, whole
+  <d> @1:65
+  [1] @1:68
+  default [<![CDATA[] @1:68
+  [&foo;] @1:68
+  default []]>] @1:68
+  [2] @1:68
+  </d> @1:71
+doc 1, etree, whole
+  <d> @1:65
+  [1] @1:68
+  default [<![CDATA[] @1:68
+  [&foo;] @1:68
+  default []]>] @1:68
+  [2] @1:68
+  </d> @1:71
+doc 1, all, whole
+  <d> @1:65
+  [1] @1:68
+  start-cdata @1:68
+  [&foo;] @1:68
+  end-cdata @1:68
+  [2] @1:68
+  </d> @1:71
+doc 1, current, whole
+  <d> @1:65
+  default [<d>] @1:65
+  [1] @1:68
+  default [1] @1:68
+  default [<![CDATA[] @1:68
+  [&foo;] @1:68
+  default [&foo;] @1:68
+  default []]>] @1:68
+  [2] @1:68
+  default [2] @1:68
+  </d> @1:71
+  default [</d>] @1:71
+doc 1, etree, 1-byte pieces
+  <d> @1:65
+  [1] @1:68
+  default [<![CDATA[] @1:68
+  [&foo;] @1:68
+  default []]>] @1:68
+  [2] @1:68
+  </d> @1:71
+doc 2, none, whole
+  default [\n] @3:19
+  default [<d>] @4:0
+  default [\n] @4:3
+  default [a] @5:0
+  default [\n] @5:0
+  default [b] @5:0
+  default [\n] @5:0
+  default [c] @5:0
+  default [\n] @5:0
+  default [&#66;] @5:0
+  default [a] @5:3
+  default [\n] @5:3
+  default [b] @5:3
+  default [\n] @5:3
+  default [c] @5:3
+  default [\n] @5:3
+  default [&#66;] @5:3
+  default [</d>] @5:6
+doc 2, text, whole
+  default [\n] @3:19
+  <d> @4:0
+  [\n] @4:3
+  [a] @5:0
+  [\n] @5:0
+  [b] @5:0
+  [\n] @5:0
+  [c] @5:0
+  [\n] @5:0
+  [B] @5:0
+  [a] @5:3
+  [\n] @5:3
+  [b] @5:3
+  [\n] @5:3
+  [c] @5:3
+  [\n] @5:3
+  [B] @5:3
+  </d> @5:6
+doc 2, etree, whole
+  default [\n] @3:19
+  <d> @4:0
+  [\n] @4:3
+  [a] @5:0
+  [\n] @5:0
+  [b] @5:0
+  [\n] @5:0
+  [c] @5:0
+  [\n] @5:0
+  [B] @5:0
+  [a] @5:3
+  [\n] @5:3
+  [b] @5:3
+  [\n] @5:3
+  [c] @5:3
+  [\n] @5:3
+  [B] @5:3
+  </d> @5:6
+doc 2, all, whole
+  default [\n] @3:19
+  <d> @4:0
+  [\n] @4:3
+  [a] @5:0
+  [\n] @5:0
+  [b] @5:0
+  [\n] @5:0
+  [c] @5:0
+  [\n] @5:0
+  [B] @5:0
+  [a] @5:3
+  [\n] @5:3
+  [b] @5:3
+  [\n] @5:3
+  [c] @5:3
+  [\n] @5:3
+  [B] @5:3
+  </d> @5:6
+doc 2, current, whole
+  default [\n] @3:19
+  <d> @4:0
+  default [<d>] @4:0
+  [\n] @4:3
+  default [\n] @4:3
+  [a] @5:0
+  default [a] @5:0
+  [\n] @5:0
+  default [\n] @5:0
+  [b] @5:0
+  default [b] @5:0
+  [\n] @5:0
+  default [\n] @5:0
+  [c] @5:0
+  default [c] @5:0
+  [\n] @5:0
+  default [\n] @5:0
+  [B] @5:0
+  default [&#66;] @5:0
+  [a] @5:3
+  default [a] @5:3
+  [\n] @5:3
+  default [\n] @5:3
+  [b] @5:3
+  default [b] @5:3
+  [\n] @5:3
+  default [\n] @5:3
+  [c] @5:3
+  default [c] @5:3
+  [\n] @5:3
+  default [\n] @5:3
+  [B] @5:3
+  default [&#66;] @5:3
+  </d> @5:6
+  default [</d>] @5:6
+doc 2, etree, 1-byte pieces
+  default [\n] @3:19
+  <d> @4:0
+  [\n] @4:3
+  [a] @5:0
+  [\n] @5:0
+  [b] @5:0
+  [\n] @5:0
+  [c] @5:0
+  [\n] @5:0
+  [B] @5:0
+  [a] @5:3
+  [\n] @5:3
+  [b] @5:3
+  [\n] @5:3
+  [c] @5:3
+  [\n] @5:3
+  [B] @5:3
+  </d> @5:6
+doc 3, none, whole
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  default [<doc>] @5:0
+  default [<![CDATA[] @5:5
+  default [&foo;] @5:5
+  default []]>] @5:5
+  default [</doc>] @5:8
+  default [\n] @5:14
+doc 3, text, whole
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  <doc> @5:0
+  default [<![CDATA[] @5:5
+  [&foo;] @5:5
+  default []]>] @5:5
+  </doc> @5:8
+  default [\n] @5:14
+doc 3, etree, whole
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  <doc> @5:0
+  default [<![CDATA[] @5:5
+  [&foo;] @5:5
+  default []]>] @5:5
+  </doc> @5:8
+  default [\n] @5:14
+doc 3, all, whole
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  <doc> @5:0
+  start-cdata @5:5
+  [&foo;] @5:5
+  end-cdata @5:5
+  </doc> @5:8
+  default [\n] @5:14
+doc 3, current, whole
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  <doc> @5:0
+  default [<doc>] @5:0
+  default [<![CDATA[] @5:5
+  [&foo;] @5:5
+  default [&foo;] @5:5
+  default []]>] @5:5
+  </doc> @5:8
+  default [</doc>] @5:8
+  default [\n] @5:14
+doc 3, etree, 1-byte pieces
+  default [\n] @1:15
+  default [\n] @2:24
+  default [\n] @3:31
+  default [\n] @4:2
+  <doc> @5:0
+  default [<![CDATA[] @5:5
+  [&foo;] @5:5
+  default []]>] @5:5
+  </doc> @5:8
+  default [\n] @5:14
+doc 4, none, whole
+  default [<d>] @1:58
+  default [<![CDATA[] @1:61
+  default []]>] @1:61
+  default [<![CDATA[] @1:61
+  default [x] @1:61
+  default []y] @1:61
+  default []] @1:61
+  default []] @1:61
+  default []]>] @1:61
+  default [</d>] @1:64
+doc 4, text, whole
+  <d> @1:58
+  default [<![CDATA[] @1:61
+  default []]>] @1:61
+  default [<![CDATA[] @1:61
+  [x] @1:61
+  []y] @1:61
+  []] @1:61
+  []] @1:61
+  default []]>] @1:61
+  </d> @1:64
+doc 4, etree, whole
+  <d> @1:58
+  default [<![CDATA[] @1:61
+  default []]>] @1:61
+  default [<![CDATA[] @1:61
+  [x] @1:61
+  []y] @1:61
+  []] @1:61
+  []] @1:61
+  default []]>] @1:61
+  </d> @1:64
+doc 4, all, whole
+  <d> @1:58
+  start-cdata @1:61
+  end-cdata @1:61
+  start-cdata @1:61
+  [x] @1:61
+  []y] @1:61
+  []] @1:61
+  []] @1:61
+  end-cdata @1:61
+  </d> @1:64
+doc 4, current, whole
+  <d> @1:58
+  default [<d>] @1:58
+  default [<![CDATA[] @1:61
+  default []]>] @1:61
+  default [<![CDATA[] @1:61
+  [x] @1:61
+  default [x] @1:61
+  []y] @1:61
+  default []y] @1:61
+  []] @1:61
+  default []] @1:61
+  []] @1:61
+  default []] @1:61
+  default []]>] @1:61
+  </d> @1:64
+  default [</d>] @1:64
+doc 4, etree, 1-byte pieces
+  <d> @1:58
+  default [<![CDATA[] @1:61
+  default []]>] @1:61
+  default [<![CDATA[] @1:61
+  [x] @1:61
+  []y] @1:61
+  []] @1:61
+  []] @1:61
+  default []]>] @1:61
+  </d> @1:64
+doc 5, none, whole
+  default [<d>] @1:0
+  default [a] @1:3
+  default [<b x='1'>] @1:4
+  default [c] @1:13
+  default [\n] @1:14
+  default [d] @2:0
+  default [\r\n] @2:1
+  default [e] @3:0
+  default [<!--k-->] @3:1
+  default [<?p q?>] @3:9
+  default [<![CDATA[] @3:16
+  default [z] @3:25
+  default [\n] @3:26
+  default []]>] @4:0
+  default [</b>] @4:3
+  default [&amp;] @4:7
+  default [&#65;] @4:12
+  default [<x/>] @4:17
+  default [\r\n] @4:21
+  default [</d>] @5:0
+doc 5, text, whole
+  <d> @1:0
+  [a] @1:3
+  <b> @1:4
+  [c] @1:13
+  [\n] @1:14
+  [d] @2:0
+  [\n] @2:1
+  [e] @3:0
+  default [<!--k-->] @3:1
+  default [<?p q?>] @3:9
+  default [<![CDATA[] @3:16
+  [z] @3:25
+  [\n] @3:26
+  default []]>] @4:0
+  </b> @4:3
+  [&] @4:7
+  [A] @4:12
+  <x> @4:17
+  </x> @4:21
+  [\n] @4:21
+  </d> @5:0
+doc 5, etree, whole
+  <d> @1:0
+  [a] @1:3
+  <b> @1:4
+  [c] @1:13
+  [\n] @1:14
+  [d] @2:0
+  [\n] @2:1
+  [e] @3:0
+  comment [k] @3:1
+  pi [p] [q] @3:9
+  default [<![CDATA[] @3:16
+  [z] @3:25
+  [\n] @3:26
+  default []]>] @4:0
+  </b> @4:3
+  [&] @4:7
+  [A] @4:12
+  <x> @4:17
+  </x> @4:21
+  [\n] @4:21
+  </d> @5:0
+doc 5, all, whole
+  <d> @1:0
+  [a] @1:3
+  <b> @1:4
+  [c] @1:13
+  [\n] @1:14
+  [d] @2:0
+  [\n] @2:1
+  [e] @3:0
+  comment [k] @3:1
+  pi [p] [q] @3:9
+  start-cdata @3:16
+  [z] @3:25
+  [\n] @3:26
+  end-cdata @4:0
+  </b> @4:3
+  [&] @4:7
+  [A] @4:12
+  <x> @4:17
+  </x> @4:21
+  [\n] @4:21
+  </d> @5:0
+doc 5, current, whole
+  <d> @1:0
+  default [<d>] @1:0
+  [a] @1:3
+  default [a] @1:3
+  <b> @1:4
+  default [<b x='1'>] @1:4
+  [c] @1:13
+  default [c] @1:13
+  [\n] @1:14
+  default [\n] @1:14
+  [d] @2:0
+  default [d] @2:0
+  [\n] @2:1
+  default [\r\n] @2:1
+  [e] @3:0
+  default [e] @3:0
+  default [<!--k-->] @3:1
+  default [<?p q?>] @3:9
+  default [<![CDATA[] @3:16
+  [z] @3:25
+  default [z] @3:25
+  [\n] @3:26
+  default [\n] @3:26
+  default []]>] @4:0
+  </b> @4:3
+  default [</b>] @4:3
+  [&] @4:7
+  default [&amp;] @4:7
+  [A] @4:12
+  default [&#65;] @4:12
+  <x> @4:17
+  default [<x/>] @4:17
+  </x> @4:21
+  default [] @4:21
+  [\n] @4:21
+  default [\r\n] @4:21
+  </d> @5:0
+  default [</d>] @5:0
+doc 5, etree, 1-byte pieces
+  <d> @1:0
+  [a] @1:3
+  <b> @1:4
+  [c] @1:13
+  [\n] @1:14
+  [d] @2:0
+  [\n] @2:1
+  [e] @3:0
+  comment [k] @3:1
+  pi [p] [q] @3:9
+  default [<![CDATA[] @3:16
+  [z] @3:25
+  [\n] @3:26
+  default []]>] @4:0
+  </b> @4:3
+  [&] @4:7
+  [A] @4:12
+  <x> @4:17
+  </x> @4:21
+  [\n] @4:21
+  </d> @5:0

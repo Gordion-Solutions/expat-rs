@@ -11,6 +11,7 @@
 //! normalised (§3.3.3), or content brought in by an entity.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use crate::error::Position;
 use crate::external::EntityContext;
@@ -32,7 +33,9 @@ pub enum Event<'a> {
     Doctype {
         /// The root element name the DOCTYPE declares.
         name: &'a str,
-        /// The rest of the declaration as written, trimmed.
+        /// The external ID as written, trimmed (empty if there is none). The
+        /// internal subset's declarations follow as events of their own,
+        /// then [`Event::EndDoctype`].
         body: &'a str,
         /// System identifier of the external subset, if any.
         system_id: Option<Cow<'a, str>>,
@@ -179,10 +182,19 @@ pub enum Event<'a> {
     ParameterEntityRef(Cow<'a, str>),
 
     /// Whitespace outside the root element (before it or after it, outside
-    /// markup), with line endings normalised (§2.11). Reported only with
+    /// markup, and between the internal subset's declarations), with line
+    /// endings normalised (§2.11). Reported only with
     /// [`crate::StreamParser::with_outside_whitespace`]; libexpat passes it
     /// to its default handler.
     Whitespace(Cow<'a, str>),
+
+    /// A markup declaration in the internal subset that no other event
+    /// reports, as written: one not processed because it follows a
+    /// parameter-entity reference that wasn't read (§5.1), or an
+    /// attribute-list declaration that declares nothing. Reported only with
+    /// [`crate::StreamParser::with_outside_whitespace`], so that the events'
+    /// source text covers the whole document.
+    OtherDecl(Cow<'a, str>),
 
     /// A reference in content to an external parsed entity, reported for
     /// the caller to read when
@@ -304,7 +316,15 @@ pub struct Located<'a> {
     /// input, different for input in other encodings (libexpat's
     /// `XML_GetCurrentByteIndex` counts these bytes).
     pub input_start: usize,
+    /// For an event from an internal entity's replacement text (or a loaded
+    /// external entity's): the text in it the event came from, as `raw` is
+    /// for the document; `span` and `raw` are then the reference's. `None`
+    /// for events from the document itself.
+    pub entity_raw: Option<Arc<str>>,
 }
+
+/// [`Located::entity_raw`].
+pub(crate) type EntityRaw = Option<Arc<str>>;
 
 /// An attribute on a start tag.
 #[derive(Clone, Debug, PartialEq, Eq)]

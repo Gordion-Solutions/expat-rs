@@ -96,7 +96,7 @@ used) and fixed in expat-rs or expat-capi:
 - Suspending a parse (`XML_StopParser(parser, XML_TRUE)`, `XML_ResumeParser`)
   isn't supported; pyexpat doesn't use it.
 - `XML_GetInputContext` returns NULL (pyexpat then reports no context).
-- For about 1050 malformed documents in the W3C suite the error message or
+- For about 260 malformed documents in the W3C suite the error message or
   position differs (mostly DTD edge cases); the verdict is the same in every
   case.
 

@@ -56,7 +56,8 @@ impl Position {
     /// just before `run` was `\r` (so a leading `\n` ends no new line).
     pub(crate) fn advance_bytes(mut self, after_cr: bool, run: &[u8]) -> Position {
         match line_breaks(after_cr, run) {
-            (0, _) => self.column += chars(run),
+            // A `\n` that completes a `\r\n` ends no line and takes no column.
+            (0, line_start) => self.column += chars(&run[line_start..]),
             (n, line_start) => {
                 self.line += n;
                 self.column = 1 + chars(&run[line_start..]);

@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased (0.4.0)
+
+The internal subset is read, and reported, declaration by declaration, so
+`StreamParser` delivers each declaration as soon as it is complete (it
+waited for the end of the DOCTYPE), as libexpat does.
+
+### Changed (breaking)
+- `Event::Doctype` comes at the DOCTYPE's `[` (or its `>`): its `body` is
+  the external ID only, and its source text the header. The internal
+  subset's declarations follow as their own events, then
+  `Event::EndDoctype`, whose source text is the closing `]>` (or, without
+  an internal subset, the `>`). `Token::Doctype` likewise, followed by the
+  new `Token::SubsetDecl`, `Token::SubsetWhitespace` and
+  `Token::DoctypeEnd`.
+- `Located` has a new field, `entity_raw`: for an event from an entity's
+  replacement text, the text in it the event came from (`raw` and `span`
+  are the reference's).
+
+### Added
+- `Event::OtherDecl`: with `with_outside_whitespace`, a declaration no
+  other event reports (not processed after an unread parameter entity
+  reference, or an attribute-list declaration that declares nothing); and
+  whitespace between declarations comes as `Event::Whitespace`. With that
+  option the events' source text covers the whole document.
+
+### Fixed
+- After a parameter entity reference that isn't read, entity and
+  attribute-list declarations are processed when the document is
+  standalone="yes", as XML 1.0 §5.1 requires (they were skipped).
+- Columns after a `\r\n` passed over inside a construct (whitespace in a
+  tag or in the DOCTYPE) were one too many.
+- `StreamParser`: a `\n` starting a chunk after one that ended with `\r`
+  began a new line; whitespace outside the root element is delivered up
+  to the end of each chunk, as libexpat delivers it; reparse deferral in
+  the DOCTYPE follows libexpat's tokens, so declarations aren't held back.
+- Input ending inside the DOCTYPE is reported where libexpat reports it;
+  with namespaces, a colon in an entity or notation name is a syntax error
+  at the name.
+
 ## 0.3.0 — 2026-11-15
 
 What the libexpat-compatible C library (`expat-capi`, in this repository,
