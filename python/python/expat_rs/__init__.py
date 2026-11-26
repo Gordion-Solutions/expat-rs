@@ -73,8 +73,13 @@ def install():
         import pyexpat
 
         real = getattr(pyexpat, "expat_CAPI", None)
+        # Before reparse deferral (libexpat 2.6; CPython 3.10.14, 3.11.9,
+        # 3.12.3), the standard library can neither turn it off nor flush.
+        deferral = hasattr(pyexpat.ParserCreate(), "SetReparseDeferralEnabled")
     except ImportError:
         real = None
+        deferral = True
+    _pyexpat._set_reparse_deferral_default(deferral)
     _pyexpat.expat_CAPI = _pyexpat._expat_capi(real)
     sys.modules["pyexpat"] = _pyexpat
     sys.modules["pyexpat.errors"] = _pyexpat.errors

@@ -4,6 +4,7 @@ changes sys.modules for good.
     python -m unittest discover -s tests
 """
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -12,8 +13,13 @@ import unittest
 
 def run(code):
     """Run `code` in a fresh interpreter; return its stdout."""
+    # UTF-8 output whatever the console's encoding (Windows).
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     done = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(code)], capture_output=True, text=True
+        [sys.executable, "-c", textwrap.dedent(code)],
+        capture_output=True,
+        encoding="utf-8",
+        env=env,
     )
     if done.returncode != 0:
         raise AssertionError(done.stderr)
@@ -81,6 +87,25 @@ class InstallTests(unittest.TestCase):
             out.splitlines(),
             ["start a {'x': '1'}", "<a><b>t</b></a>", "{'k': [1, 'v']}"],
         )
+
+    def test_reparse_deferral_default(self):
+        # On by default only if the interpreter's own pyexpat can turn it
+        # off (CPython 3.10.14, 3.11.9, 3.12.3 and later).
+        out = run("""
+            import pyexpat
+            supported = hasattr(pyexpat.ParserCreate(), "SetReparseDeferralEnabled")
+            import expat_rs
+            expat_rs.install()
+            import xml.parsers.expat as expat
+            p = expat.ParserCreate()
+            print(p.GetReparseDeferralEnabled() == supported,
+                  p.ExternalEntityParserCreate(None).GetReparseDeferralEnabled() == supported)
+            import xml.etree.ElementTree as ET
+            events = ET.XMLPullParser(["end"])
+            events.feed("<a><b/>")
+            print([e.tag for _, e in events.read_events()])
+        """)
+        self.assertEqual(out.splitlines(), ["True True", "['b']"])
 
     def test_too_late(self):
         out = run("""

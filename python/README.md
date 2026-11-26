@@ -35,6 +35,10 @@ Call it at start-up, before anything imports those modules: it raises
 using libexpat. On Python 3.10 and 3.11, `_elementtree` can't be made to
 switch once imported.
 
+On interpreters from before libexpat 2.6's reparse deferral (older than
+CPython 3.10.14, 3.11.9 and 3.12.3), whose standard library can't turn it
+off, `install()` makes parsers start with it off, as their libexpat had it.
+
 
 ## Threads
 

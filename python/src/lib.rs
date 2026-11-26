@@ -23,6 +23,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use expat::*;
 use pyo3::exceptions::{PyAttributeError, PyRuntimeError, PyTypeError, PyValueError};
@@ -143,6 +144,20 @@ impl Drop for XmlParser {
     }
 }
 
+/// Whether new parsers defer reparsing (libexpat 2.6's default). Off when
+/// `expat_rs.install()` serves an interpreter whose own `pyexpat` predates
+/// reparse deferral: its standard library (ElementTree's XMLPullParser, for
+/// one) has no way to turn it off or flush, and its libexpat didn't defer.
+static REPARSE_DEFERRAL_DEFAULT: AtomicBool = AtomicBool::new(true);
+
+/// Applies [`REPARSE_DEFERRAL_DEFAULT`] to a new parser.
+pub(crate) fn apply_reparse_deferral_default(p: XML_Parser) {
+    if !p.is_null() && !REPARSE_DEFERRAL_DEFAULT.load(Ordering::Relaxed) {
+        // SAFETY: `p` is a live parser.
+        unsafe { XML_SetReparseDeferralEnabled(p, XML_FALSE) };
+    }
+}
+
 /// An argument that `pyexpat` declares `bool` to Argument Clinic: any
 /// object, taken by its truth value.
 struct Truth(bool);
@@ -201,7 +216,7 @@ impl XmlParser {
             ordered_attributes: Cell::new(false),
             specified_attributes: Cell::new(false),
             namespace_prefixes: Cell::new(false),
-            reparse_deferral: Cell::new(true),
+            reparse_deferral: Cell::new(REPARSE_DEFERRAL_DEFAULT.load(Ordering::Relaxed)),
             error: RefCell::new(None),
             in_callback: Cell::new(false),
             parent,
@@ -1253,6 +1268,7 @@ fn parser_create(
             separator.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
         )
     };
+    apply_reparse_deferral_default(itself);
     make_parser(py, itself, intern, None)
 }
 
@@ -1264,6 +1280,15 @@ fn parser_create(
 #[pyo3(name = "_expat_capi")]
 fn expat_capi<'py>(py: Python<'py>, real: Option<Bound<'py, PyCapsule>>) -> PyResult<Bound<'py, PyCapsule>> {
     capi::make_capsule(py, real.as_ref())
+}
+
+/// `_set_reparse_deferral_default(enabled)`: whether parsers created from
+/// now on, here and through `expat_CAPI`, defer reparsing. Used by
+/// `expat_rs.install()`.
+#[pyfunction]
+#[pyo3(name = "_set_reparse_deferral_default")]
+fn set_reparse_deferral_default(enabled: bool) {
+    REPARSE_DEFERRAL_DEFAULT.store(enabled, Ordering::Relaxed);
 }
 
 #[pyfunction]
@@ -1280,6 +1305,7 @@ fn _pyexpat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parser_create, m)?)?;
     m.add_function(wrap_pyfunction!(error_string, m)?)?;
     m.add_function(wrap_pyfunction!(expat_capi, m)?)?;
+    m.add_function(wrap_pyfunction!(set_reparse_deferral_default, m)?)?;
     m.add("ExpatError", py.get_type::<ExpatError>())?;
     m.add("error", py.get_type::<ExpatError>())?;
     m.add("EXPAT_VERSION", text(XML_ExpatVersion()).unwrap_or_default())?;

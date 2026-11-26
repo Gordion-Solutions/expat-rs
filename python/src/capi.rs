@@ -109,7 +109,7 @@ pub fn make_capsule<'py>(py: Python<'py>, real: Option<&Bound<'py, PyCapsule>>) 
         get_error_column_number: XML_GetCurrentColumnNumber as *const c_void,
         get_error_line_number: XML_GetCurrentLineNumber as *const c_void,
         parse: XML_Parse as *const c_void,
-        parser_create_mm: XML_ParserCreate_MM as *const c_void,
+        parser_create_mm: parser_create_mm as *const c_void,
         parser_free: XML_ParserFree as *const c_void,
         set_character_data_handler: XML_SetCharacterDataHandler as *const c_void,
         set_comment_handler: XML_SetCommentHandler as *const c_void,
@@ -133,6 +133,18 @@ pub fn make_capsule<'py>(py: Python<'py>, real: Option<&Bound<'py, PyCapsule>>) 
         set_hash_salt_16_bytes: ptr::null(),
     };
     PyCapsule::new_with_value(py, Table(table), NAME)
+}
+
+/// XML_ParserCreate_MM, with this module's reparse deferral default.
+unsafe extern "C" fn parser_create_mm(
+    encoding: *const XML_Char,
+    memsuite: *const XML_Memory_Handling_Suite,
+    namespace_separator: *const XML_Char,
+) -> XML_Parser {
+    // SAFETY: the caller's arguments, passed on as they came.
+    let p = unsafe { XML_ParserCreate_MM(encoding, memsuite, namespace_separator) };
+    crate::apply_reparse_deferral_default(p);
+    p
 }
 
 /// `pyexpat`'s unknown encoding handler, for `_elementtree`'s parsers: a
